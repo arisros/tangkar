@@ -48,7 +48,7 @@ func (s *Store) ImportPhones(ctx context.Context, text string) (int, []string, e
 	}
 	defer tx.Rollback()
 	var saved int
-	var bad []string
+	bad := []string{}
 	for _, raw := range strings.Split(text, "\n") {
 		line := strings.TrimSpace(raw)
 		if line == "" || strings.HasPrefix(line, "#") {

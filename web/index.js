@@ -59,8 +59,9 @@ document.addEventListener("DOMContentLoaded", async () => {
     $("phones-go").addEventListener("click", async () => {
       try {
         const r = await api("POST", "/api/phones", { text: $("phones-in").value });
-        $("phones-out").textContent = r.saved + " nomor tersimpan" + (r.rejected.length ? ". Ditolak: " + r.rejected.join(" | ") : ".");
-        if (!r.rejected.length) $("phones-in").value = "";
+        const rejected = r.rejected || [];
+        $("phones-out").textContent = r.saved + " nomor tersimpan" + (rejected.length ? ". Ditolak: " + rejected.join(" | ") : ".");
+        if (!rejected.length) $("phones-in").value = "";
       } catch (e) { $("phones-out").textContent = e.message; }
     });
   }

@@ -262,3 +262,14 @@ func TestVersionedAssets(t *testing.T) {
 		}
 	}
 }
+
+func TestPhoneImportAllValid(t *testing.T) {
+	e := newEnv(t)
+	r, out := e.req("POST", "/api/phones", admin, `{"text":"aris.kurniawan@bfi.co.id, 08119476622"}`, true)
+	if r.StatusCode != http.StatusOK || out["saved"] != float64(1) {
+		t.Fatalf("import: %d %v", r.StatusCode, out)
+	}
+	if rej, ok := out["rejected"].([]any); !ok || len(rej) != 0 {
+		t.Fatalf("rejected must be an empty list, got %#v", out["rejected"])
+	}
+}
