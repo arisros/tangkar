@@ -212,3 +212,20 @@ func TestSSE(t *testing.T) {
 		}
 	}
 }
+
+func TestFriendLine(t *testing.T) {
+	e := newEnv(t)
+	id := e.create()
+	path := "/api/orders/" + id + "/lines"
+	if r, _ := e.req("POST", path, "budi@bfi.co.id", `{"menu":"DAGING","sate":1,"note":"","for":"Bapak Direktur Utama X"}`, true); r.StatusCode != http.StatusBadRequest {
+		t.Fatalf("long friend name accepted: %d", r.StatusCode)
+	}
+	if r, _ := e.req("POST", path, "budi@bfi.co.id", `{"menu":"DAGING","sate":1,"note":"","for":"<i>Okky</i>"}`, true); r.StatusCode != http.StatusCreated {
+		t.Fatalf("friend line: %d", r.StatusCode)
+	}
+	_, snap := e.req("GET", "/api/orders/"+id, "budi@bfi.co.id", "", false)
+	l := snap["lines"].([]any)[0].(map[string]any)
+	if l["for_name"] != "iOkkyi" || l["email"] != "budi@bfi.co.id" {
+		t.Fatalf("stored: %v", l)
+	}
+}

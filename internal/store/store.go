@@ -59,6 +59,7 @@ CREATE TABLE IF NOT EXISTS lines (
 	menu       TEXT NOT NULL CHECK (menu IN ('DAGING','CAMPUR')),
 	sate       INTEGER NOT NULL CHECK (sate BETWEEN 0 AND 10),
 	note       TEXT NOT NULL DEFAULT '' CHECK (length(note) <= 10),
+	for_name   TEXT NOT NULL DEFAULT '',
 	late       INTEGER NOT NULL,
 	batch      INTEGER,
 	created_at INTEGER NOT NULL
@@ -119,7 +120,25 @@ func Open(path string) (*Store, error) {
 		db.Close()
 		return nil, err
 	}
+	if err := migrate(db); err != nil {
+		db.Close()
+		return nil, fmt.Errorf("migrate: %w", err)
+	}
 	return &Store{db: db, Now: time.Now}, nil
+}
+
+// migrate adds columns that databases created by older versions lack.
+func migrate(db *sql.DB) error {
+	var n int
+	if err := db.QueryRow(`SELECT count(*) FROM pragma_table_info('lines') WHERE name='for_name'`).Scan(&n); err != nil {
+		return err
+	}
+	if n == 0 {
+		if _, err := db.Exec(`ALTER TABLE lines ADD COLUMN for_name TEXT NOT NULL DEFAULT ''`); err != nil {
+			return err
+		}
+	}
+	return nil
 }
 
 func (s *Store) Close() error { return s.db.Close() }
@@ -237,12 +256,15 @@ type Line struct {
 	Menu  string `json:"menu"`
 	Sate  int    `json:"sate"`
 	Note  string `json:"note"`
+	For   string `json:"for_name"`
 	Late  bool   `json:"late"`
 	Batch *int   `json:"batch"`
 	At    int64  `json:"at"`
 }
 
-func (l Line) Order() order.Line { return order.Line{Menu: l.Menu, Sate: l.Sate, Note: l.Note} }
+func (l Line) Order() order.Line {
+	return order.Line{Menu: l.Menu, Sate: l.Sate, Note: l.Note, For: l.For}
+}
 
 type Send struct {
 	Batch   int    `json:"batch"`
@@ -309,7 +331,7 @@ func (s *Store) Running(ctx context.Context) ([]Order, error) {
 }
 
 func (s *Store) Lines(ctx context.Context, orderID string) ([]Line, error) {
-	rows, err := s.db.QueryContext(ctx, `SELECT l.id,l.email,COALESCE(u.name,l.email),l.menu,l.sate,l.note,l.late,l.batch,l.created_at
+	rows, err := s.db.QueryContext(ctx, `SELECT l.id,l.email,COALESCE(u.name,l.email),l.menu,l.sate,l.note,l.for_name,l.late,l.batch,l.created_at
 		FROM lines l LEFT JOIN users u ON u.email=l.email WHERE l.order_id=? ORDER BY l.id`, orderID)
 	if err != nil {
 		return nil, err
@@ -319,7 +341,7 @@ func (s *Store) Lines(ctx context.Context, orderID string) ([]Line, error) {
 	for rows.Next() {
 		var l Line
 		var batch sql.NullInt64
-		if err := rows.Scan(&l.ID, &l.Email, &l.Name, &l.Menu, &l.Sate, &l.Note, &l.Late, &batch, &l.At); err != nil {
+		if err := rows.Scan(&l.ID, &l.Email, &l.Name, &l.Menu, &l.Sate, &l.Note, &l.For, &l.Late, &batch, &l.At); err != nil {
 			return nil, err
 		}
 		if batch.Valid {
@@ -378,8 +400,8 @@ func (s *Store) AddLine(ctx context.Context, orderID, email string, l order.Line
 	if n >= order.MaxLines {
 		return ErrTooMany
 	}
-	if _, err := tx.ExecContext(ctx, `INSERT INTO lines(order_id,email,menu,sate,note,late,batch,created_at) VALUES(?,?,?,?,?,?,?,?)`,
-		orderID, email, l.Menu, l.Sate, l.Note, late, batch, now.Unix()); err != nil {
+	if _, err := tx.ExecContext(ctx, `INSERT INTO lines(order_id,email,menu,sate,note,for_name,late,batch,created_at) VALUES(?,?,?,?,?,?,?,?,?)`,
+		orderID, email, l.Menu, l.Sate, l.Note, l.For, late, batch, now.Unix()); err != nil {
 		return err
 	}
 	return tx.Commit()
@@ -401,7 +423,7 @@ func (s *Store) UpdateLine(ctx context.Context, orderID string, lineID int64, em
 		if late {
 			at = fmt.Sprint(s.Now().Unix())
 		}
-		_, err := tx.ExecContext(ctx, `UPDATE lines SET menu=?, sate=?, note=?, created_at=`+at+` WHERE id=?`, l.Menu, l.Sate, l.Note, lineID)
+		_, err := tx.ExecContext(ctx, `UPDATE lines SET menu=?, sate=?, note=?, for_name=?, created_at=`+at+` WHERE id=?`, l.Menu, l.Sate, l.Note, l.For, lineID)
 		return err
 	})
 }
@@ -612,7 +634,7 @@ type person struct {
 }
 
 func batchPeople(ctx context.Context, tx *sql.Tx, orderID, where string) ([]person, error) {
-	rows, err := tx.QueryContext(ctx, `SELECT l.email,COALESCE(u.name,''),l.menu,l.sate,l.note FROM lines l
+	rows, err := tx.QueryContext(ctx, `SELECT l.email,COALESCE(u.name,''),l.menu,l.sate,l.note,l.for_name FROM lines l
 		LEFT JOIN users u ON u.email=l.email WHERE l.order_id=? AND `+where+` ORDER BY l.id`, orderID)
 	if err != nil {
 		return nil, err
@@ -621,7 +643,7 @@ func batchPeople(ctx context.Context, tx *sql.Tx, orderID, where string) ([]pers
 	var out []person
 	for rows.Next() {
 		var p person
-		if err := rows.Scan(&p.email, &p.name, &p.Menu, &p.Sate, &p.Note); err != nil {
+		if err := rows.Scan(&p.email, &p.name, &p.Menu, &p.Sate, &p.Note, &p.For); err != nil {
 			return nil, err
 		}
 		out = append(out, p)
@@ -635,15 +657,25 @@ func batchLines(ctx context.Context, tx *sql.Tx, orderID, where string) ([]order
 	if err != nil {
 		return nil, err
 	}
+	// A bowl ordered for a friend is labelled with the friend, never the orderer.
+	key := func(p person) string {
+		if p.For != "" {
+			return order.FriendKey(p.For)
+		}
+		return p.email
+	}
 	people := make([]order.Person, len(ps))
 	for i, p := range ps {
-		people[i] = order.Person{Email: p.email, Name: p.name}
+		people[i] = order.Person{Email: key(p), Name: p.name}
+		if p.For != "" {
+			people[i].Name = p.For
+		}
 	}
 	short := order.ShortNames(people)
 	out := make([]order.Line, len(ps))
 	for i, p := range ps {
 		out[i] = p.Line
-		out[i].Who = short[p.email]
+		out[i].Who = short[key(p)]
 	}
 	return out, nil
 }

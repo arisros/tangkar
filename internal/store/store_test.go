@@ -2,6 +2,7 @@ package store
 
 import (
 	"context"
+	"database/sql"
 	"errors"
 	"math/rand/v2"
 	"path/filepath"
@@ -419,5 +420,62 @@ func TestUpdateLateLineRestartsDebounce(t *testing.T) {
 	tick(t, s)
 	if p := pending(t, s); len(p) != 1 || !strings.Contains(p[0].Message, "B: DAGING 3 SATE") {
 		t.Fatalf("changed bowl not sent: %+v", p)
+	}
+}
+
+func TestFriendOrder(t *testing.T) {
+	ctx := context.Background()
+	s, c := newStore(t)
+	s.UpsertUser(ctx, "aris.kurniawan@bfi.co.id", "Aris")
+	s.ImportPhones(ctx, "aris.kurniawan@bfi.co.id, 08123456789")
+	o := mustOrder(t, s, c)
+	s.AddLine(ctx, o.ID, "aris.kurniawan@bfi.co.id", order.Line{Menu: order.Campur, Sate: 2})
+	if err := s.AddLine(ctx, o.ID, "aris.kurniawan@bfi.co.id", order.Line{Menu: order.Daging, Sate: 1, For: "Okky"}); err != nil {
+		t.Fatal(err)
+	}
+	lines, _ := s.Lines(ctx, o.ID)
+	friend := lines[1]
+	if friend.For != "Okky" || friend.Email != "aris.kurniawan@bfi.co.id" {
+		t.Fatalf("friend line: %+v", friend)
+	}
+	if err := s.DeleteLine(ctx, o.ID, friend.ID, "okky@bfi.co.id"); !errors.Is(err, ErrNotFound) {
+		t.Fatal("only the orderer may touch a friend's bowl")
+	}
+	c.at("11:30")
+	tick(t, s)
+	p := pending(t, s)
+	if len(p) != 1 || !strings.Contains(p[0].Message, "ARIS: CAMPUR 2 SATE\nOKKY: DAGING 1 SATE") || strings.Contains(p[0].Message, "via") {
+		t.Fatalf("seller message: %+v", p)
+	}
+	s.MarkSend(ctx, o.ID, 0, nil)
+	ns, _ := s.PendingNotices(ctx)
+	if len(ns) != 1 || !strings.Contains(ns[0].Message, "🍲 DAGING 1 SATE untuk Okky") {
+		t.Fatalf("orderer notice: %+v", ns)
+	}
+}
+
+func TestMigrateOldDatabase(t *testing.T) {
+	path := filepath.Join(t.TempDir(), "old.db")
+	db, err := sql.Open("sqlite", "file:"+path)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if _, err := db.Exec(`CREATE TABLE lines (id INTEGER PRIMARY KEY AUTOINCREMENT, order_id TEXT NOT NULL, email TEXT NOT NULL,
+		menu TEXT NOT NULL, sate INTEGER NOT NULL, note TEXT NOT NULL DEFAULT '', late INTEGER NOT NULL, batch INTEGER, created_at INTEGER NOT NULL);
+		INSERT INTO lines(order_id,email,menu,sate,note,late,batch,created_at) VALUES('x','a@bfi.co.id','DAGING',1,'',0,0,1)`); err != nil {
+		t.Fatal(err)
+	}
+	db.Close()
+	s, err := Open(path)
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer s.Close()
+	lines, err := s.Lines(context.Background(), "x")
+	if err != nil || len(lines) != 1 || lines[0].For != "" {
+		t.Fatalf("old bowl after migration: %+v %v", lines, err)
+	}
+	if _, err := Open(path); err != nil {
+		t.Fatalf("second open: %v", err)
 	}
 }

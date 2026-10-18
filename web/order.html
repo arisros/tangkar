@@ -35,6 +35,7 @@
     <div class="actions" id="done-actions">
       <button class="tool big" type="button" id="more">+ Order lagi</button>
       <button class="tool big" type="button" id="change">✎ Ganti order</button>
+      <button class="tool big wide" type="button" id="friend">👥 Orderkan teman</button>
     </div>
   </section>
 
@@ -42,6 +43,13 @@
     <div class="form-h" id="form-h" hidden>
       <span id="form-title"></span>
       <button class="link" type="button" id="cancel">Batal</button>
+    </div>
+    <div class="row for-row" id="for-row" hidden>
+      <span class="lbl">Untuk</span>
+      <div class="field">
+        <input id="for" maxlength="20" autocomplete="off" placeholder="nama teman" aria-label="nama teman yang dipesankan">
+        <span class="count" id="for-count">0/20</span>
+      </div>
     </div>
     <div class="menu" role="group" aria-label="Menu">
       <button class="key" type="button" data-menu="DAGING" aria-pressed="true">Daging<small>soto daging</small></button>
@@ -63,6 +71,7 @@
       </div>
     </div>
     <button class="go" type="button" id="go">Pesan</button>
+    <button class="link friend-link" type="button" id="friend-form">👥 Orderkan teman</button>
     <p class="err" id="err" role="alert"></p>
     <div class="stamp" id="stamp" hidden><span>TUTUP</span></div>
   </section>

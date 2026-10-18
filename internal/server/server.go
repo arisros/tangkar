@@ -446,6 +446,7 @@ func readLine(w http.ResponseWriter, r *http.Request) (order.Line, bool) {
 		Menu string `json:"menu"`
 		Sate int    `json:"sate"`
 		Note string `json:"note"`
+		For  string `json:"for"`
 	}
 	if !readJSON(w, r, &in) {
 		return order.Line{}, false
@@ -454,15 +455,18 @@ func readLine(w http.ResponseWriter, r *http.Request) (order.Line, bool) {
 	if err == nil {
 		err = order.ValidSate(in.Sate)
 	}
-	var note string
+	var note, friend string
 	if err == nil {
 		note, err = order.CleanNote(in.Note)
+	}
+	if err == nil {
+		friend, err = order.CleanFriend(in.For)
 	}
 	if err != nil {
 		writeErr(w, http.StatusBadRequest, err.Error())
 		return order.Line{}, false
 	}
-	return order.Line{Menu: menu, Sate: in.Sate, Note: note}, true
+	return order.Line{Menu: menu, Sate: in.Sate, Note: note, For: friend}, true
 }
 
 func (s *Server) handleAddLine(w http.ResponseWriter, r *http.Request, u User) {

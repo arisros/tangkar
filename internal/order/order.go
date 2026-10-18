@@ -110,6 +110,7 @@ type Line struct {
 	Menu string
 	Sate int
 	Note string
+	For  string
 }
 
 // String is the bowl as the seller reads it: "DAGING 2 SATE (no tauge)".
@@ -203,7 +204,11 @@ func Notice(name string, bowls []Line) string {
 	var b strings.Builder
 	fmt.Fprintf(&b, "Halo Kak %s 👋 orderan Kakak ke Mamang Tangkar sudah diproses ya:\n\n", name)
 	for _, l := range bowls {
-		b.WriteString("🍲 " + l.String() + "\n")
+		b.WriteString("🍲 " + l.String())
+		if l.For != "" {
+			b.WriteString(" untuk " + l.For)
+		}
+		b.WriteString("\n")
 	}
 	b.WriteString("\nSelamat makan nanti 😋🍢")
 	return b.String()
@@ -214,6 +219,23 @@ type Person struct {
 	Name  string
 }
 
+const MaxFriend = 20
+
+var ErrFriend = fmt.Errorf("nama teman maksimal %d huruf", MaxFriend)
+
+// CleanFriend cleans the name typed for someone ordered on behalf of.
+func CleanFriend(s string) (string, error) {
+	out := CleanText(s)
+	if utf8.RuneCountInString(out) > MaxFriend {
+		return "", ErrFriend
+	}
+	return out, nil
+}
+
+// FriendKey is the Person.Email ShortNames uses for a friend's typed name, so
+// the same name from two orderers reads as the same person.
+func FriendKey(name string) string { return "friend:" + strings.ToLower(CleanText(name)) }
+
 // ShortNames gives everyone a short uppercase label for the seller: the first
 // word of their Google name, or of their email when the name is empty. People
 // who would share a label get the initial of their email's second part, and
@@ -221,8 +243,13 @@ type Person struct {
 func ShortNames(people []Person) map[string]string {
 	base := map[string]string{}
 	count := map[string]int{}
+	out := map[string]string{}
 	for _, p := range people {
 		if _, ok := base[p.Email]; ok {
+			continue
+		}
+		if strings.HasPrefix(p.Email, "friend:") {
+			out[p.Email] = strings.ToUpper(CleanText(p.Name))
 			continue
 		}
 		b := firstWord(p.Name)
@@ -232,7 +259,6 @@ func ShortNames(people []Person) map[string]string {
 		base[p.Email] = b
 		count[b]++
 	}
-	out := map[string]string{}
 	for email, b := range base {
 		if count[b] == 1 {
 			out[email] = b

@@ -128,7 +128,7 @@ button { cursor: pointer; }
 .nota .sec { border-top: 1px dashed var(--ink); margin-top: 8px; padding-top: 8px; }
 .nota .sec-h { display: flex; justify-content: space-between; font-weight: 700; }
 .nota .ln { display: flex; justify-content: space-between; gap: 10px; }
-.nota .ln .nm { color: var(--muted); white-space: nowrap; overflow: hidden; text-overflow: ellipsis; max-width: 40%; }
+.nota .ln .nm { color: var(--muted); white-space: nowrap; overflow: hidden; text-overflow: ellipsis; max-width: 55%; }
 .nota .tot { border-top: 1px dashed var(--ink); margin-top: 8px; padding-top: 8px; font-weight: 700; }
 .nota .tot .big { font-size: 18px; }
 .nota .empty { color: var(--muted); text-align: center; padding: 10px 0; }
@@ -199,3 +199,8 @@ textarea.import { width: 100%; min-height: 110px; border: 2px solid var(--ink); 
 .tool.big { padding: 14px 8px; font-size: 16px; background: var(--sheet); }
 .form-h { display: flex; justify-content: space-between; align-items: baseline; margin-bottom: 10px; font: 700 16px var(--cond); letter-spacing: .06em; text-transform: uppercase; }
 .form-h .link { padding: 0; font-size: 15px; }
+
+.for-row { margin: 0 0 12px; }
+.tool.big.wide { grid-column: 1 / -1; }
+.friend-link { display: block; margin: 10px auto 0; font-size: 15px; }
+.done li.sub { display: block; border: 0; padding: 10px 0 2px; font: 700 13px var(--cond); letter-spacing: .1em; text-transform: uppercase; color: var(--muted); }

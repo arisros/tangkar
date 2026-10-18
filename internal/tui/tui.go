@@ -86,6 +86,7 @@ const (
 	confirmCancel
 	confirmLateOff
 	confirmDelete
+	promptFriend
 )
 
 type model struct {
@@ -110,6 +111,7 @@ type model struct {
 	pick    int
 	mode    string
 	editID  int64
+	forName string
 
 	prompt prompt
 	input  textinput.Model
@@ -431,6 +433,11 @@ func (m *model) orderKey(k tea.KeyMsg) (tea.Model, tea.Cmd) {
 			return m, m.note.Focus()
 		case "enter", "p":
 			return m, m.submit()
+		case "f":
+			if m.mode != "edit" && m.mode != "friend" {
+				m.ask(promptFriend, "")
+				return m, m.input.Focus()
+			}
 		}
 	} else {
 		mine := m.mine()
@@ -445,6 +452,11 @@ func (m *model) orderKey(k tea.KeyMsg) (tea.Model, tea.Cmd) {
 		case "o", "+":
 			if p == "open" || p == "late" {
 				m.startForm("add", store.Line{Menu: order.Daging})
+			}
+		case "f":
+			if p == "open" || p == "late" {
+				m.ask(promptFriend, "")
+				return m, m.input.Focus()
 			}
 		case "g", "e":
 			if m.pick < len(mine) {
@@ -537,11 +549,11 @@ func (m *model) formActive(p string) bool {
 		}
 		m.mode = ""
 	}
-	return m.mode == "add" || len(m.mine()) == 0
+	return m.mode == "add" || m.mode == "friend" || len(m.mine()) == 0
 }
 
 func (m *model) startForm(mode string, l store.Line) {
-	m.mode, m.editID, m.status = mode, l.ID, ""
+	m.mode, m.editID, m.status, m.forName = mode, l.ID, "", l.For
 	m.menu, m.sate = l.Menu, l.Sate
 	m.note.SetValue(l.Note)
 }
@@ -556,10 +568,18 @@ func (m *model) submit() tea.Cmd {
 		return nil
 	}
 	l := order.Line{Menu: m.menu, Sate: m.sate, Note: order.CleanText(m.note.Value())}
-	body := map[string]any{"menu": m.menu, "sate": m.sate, "note": m.note.Value()}
-	method, path, done := http.MethodPost, "/api/orders/"+m.snap.Order.ID+"/lines", "✓ masuk: "+l.String()
+	friend := ""
+	if m.mode == "friend" || m.mode == "edit" {
+		friend = m.forName
+	}
+	body := map[string]any{"menu": m.menu, "sate": m.sate, "note": m.note.Value(), "for": friend}
+	label := l.String()
+	if friend != "" {
+		label = strings.ToUpper(friend) + ": " + label
+	}
+	method, path, done := http.MethodPost, "/api/orders/"+m.snap.Order.ID+"/lines", "✓ masuk: "+label
 	if m.mode == "edit" {
-		method, path, done = http.MethodPut, fmt.Sprintf("%s/%d", path, m.editID), "✓ diganti: "+l.String()
+		method, path, done = http.MethodPut, fmt.Sprintf("%s/%d", path, m.editID), "✓ diganti: "+label
 	}
 	return func() tea.Msg {
 		return savedMsg{text: done, err: m.c.call(method, path, body, nil)}
@@ -596,6 +616,18 @@ func (m *model) promptKey(k tea.KeyMsg) (tea.Model, tea.Cmd) {
 		p, v := m.prompt, strings.TrimSpace(m.input.Value())
 		m.prompt = promptNone
 		m.input.Blur()
+		if p == promptFriend {
+			name, err := order.CleanFriend(v)
+			if err == nil && name == "" {
+				err = errors.New("isi nama teman dulu ya Kakak")
+			}
+			if err != nil {
+				m.flash("", err)
+				return m, nil
+			}
+			m.startForm("friend", store.Line{Menu: order.Daging, For: name})
+			return m, nil
+		}
 		if p == promptLockAt {
 			return m, m.act("jam tutup jadi "+v, http.MethodPost, base+"/lock", map[string]string{"at": v})
 		}
@@ -856,10 +888,12 @@ func (m *model) viewOrder(b *strings.Builder, w int) {
 				title = "ORDER SUSULAN"
 			}
 			b.WriteString(row(sInk.Render(title), sMuted.Render("esc batal"), w) + "\n")
+		case "friend":
+			b.WriteString(row(sInk.Render("👥 UNTUK: "+strings.ToUpper(m.forName)), sMuted.Render("esc batal"), w) + "\n")
 		case "edit":
 			for _, l := range m.mine() {
 				if l.ID == m.editID {
-					b.WriteString(row(sInk.Render("GANTI: "+l.Order().String()), sMuted.Render("esc batal"), w) + "\n")
+					b.WriteString(row(sInk.Render("GANTI: "+friendPrefix(l)+l.Order().String()), sMuted.Render("esc batal"), w) + "\n")
 				}
 			}
 		}
@@ -899,6 +933,9 @@ func (m *model) viewOrder(b *strings.Builder, w int) {
 	case promptLate:
 		b.WriteString("Late join, menit setelah tutup (0 = tutup)\n" + m.input.View() + "\n")
 		return
+	case promptFriend:
+		b.WriteString("👥 Orderkan teman: nama temannya (maks 20 huruf)\n" + m.input.View() + "\n" + sMuted.Render("enter lanjut · esc batal") + "\n")
+		return
 	}
 	var pairs []string
 	switch {
@@ -906,11 +943,13 @@ func (m *model) viewOrder(b *strings.Builder, w int) {
 		pairs = []string{"d/a", "daging/campur", "+/-", "sate", "n", "catatan", "enter", "simpan", "esc", "batal"}
 	case m.formActive(p) && m.mode == "add":
 		pairs = []string{"d/a", "daging/campur", "+/-", "sate", "n", "catatan", "enter", "pesan lagi", "esc", "batal"}
+	case m.formActive(p) && m.mode == "friend":
+		pairs = []string{"d/a", "daging/campur", "+/-", "sate", "n", "catatan", "enter", "pesan untuk teman", "esc", "batal"}
 	case m.formActive(p):
-		pairs = []string{"d/a", "daging/campur", "+/-", "sate", "n", "catatan", "enter", "pesan", "esc", "kembali"}
+		pairs = []string{"d/a", "daging/campur", "+/-", "sate", "n", "catatan", "enter", "pesan", "f", "orderkan teman", "esc", "kembali"}
 	default:
 		if p == "open" || p == "late" {
-			pairs = append(pairs, "o", "order lagi")
+			pairs = append(pairs, "o", "order lagi", "f", "orderkan teman")
 		}
 		if len(m.mine()) > 0 {
 			pairs = append(pairs, "↑↓", "pilih", "g", "ganti", "x", "hapus")
@@ -951,7 +990,11 @@ func (m *model) nota(w int) string {
 	}
 	rule := sMuted.Render(strings.Repeat("-", w))
 	line := func(l store.Line) {
-		b.WriteString(row(l.Order().String(), sMuted.Render(l.Name), w) + "\n")
+		name := l.Name
+		if l.For != "" {
+			name = l.For + " (via " + l.Name + ")"
+		}
+		b.WriteString(row(l.Order().String(), sMuted.Render(name), w) + "\n")
 	}
 	for i, k := range batches {
 		title := "PESANAN " + clock(s.Order.LockAt)
@@ -1020,13 +1063,16 @@ func (m *model) card(w int, p string, mine []store.Line) string {
 	b.WriteString(lipgloss.NewStyle().Bold(true).Foreground(color).Render(title) + "\n")
 	for i, l := range mine {
 		tag := ""
+		if l.For != "" {
+			tag += sMuted.Render(" teman")
+		}
 		if l.Late {
 			tag += sAmber.Render(" susulan")
 		}
 		if sent(l) {
 			tag += sGreen.Render(" terkirim")
 		}
-		item := " " + l.Order().String() + " "
+		item := " " + friendPrefix(l) + l.Order().String() + " "
 		mark := "  "
 		if i == m.pick {
 			item, mark = sSel.Render(item), "▸ "
@@ -1041,4 +1087,11 @@ func (m *model) card(w int, p string, mine []store.Line) string {
 	}
 	return lipgloss.NewStyle().Border(lipgloss.RoundedBorder()).BorderForeground(color).Padding(0, 1).Width(w - 2).
 		Render(strings.TrimRight(b.String(), "\n"))
+}
+
+func friendPrefix(l store.Line) string {
+	if l.For == "" {
+		return ""
+	}
+	return strings.ToUpper(l.For) + ": "
 }

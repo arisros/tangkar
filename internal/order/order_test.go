@@ -64,24 +64,24 @@ func TestMessage(t *testing.T) {
 	Pick = func(int) int { return 0 }
 	t.Cleanup(func() { Pick = rand.IntN })
 	got := Message([]Line{
-		{"DENIS", Daging, 2, ""}, {"DENIS", Daging, 2, "no tauge"}, {"SARI", Campur, 1, ""}, {"ARIS", Campur, 0, "pedes"},
+		{"DENIS", Daging, 2, "", ""}, {"DENIS", Daging, 2, "no tauge", ""}, {"SARI", Campur, 1, "", ""}, {"ARIS", Campur, 0, "pedes", ""},
 	}, 0)
 	want := "Mang! Mau pesen tangkar ya 🍢🥩😋\n\nDENIS: DAGING 2 SATE\nDENIS: DAGING 2 SATE (no tauge)\nSARI: CAMPUR 1 SATE\nARIS: CAMPUR (pedes)\n\nMakasih Mang 🙏"
 	if got != want {
 		t.Fatalf("got:\n%s\nwant:\n%s", got, want)
 	}
-	got = Message([]Line{{"BUDI", Campur, 2, ""}}, 1)
+	got = Message([]Line{{"BUDI", Campur, 2, "", ""}}, 1)
 	want = "Mang, ada tambahan lagi nih 🙏🍢 (TAMBAHAN #1)\n\nBUDI: CAMPUR 2 SATE\n\nMakasih Mang 🙏"
 	if got != want {
 		t.Fatalf("got:\n%s\nwant:\n%s", got, want)
 	}
-	if strings.Contains(Message([]Line{{"A", Daging, 1, ""}}, 0), "Total") {
+	if strings.Contains(Message([]Line{{"A", Daging, 1, "", ""}}, 0), "Total") {
 		t.Fatal("summary line came back")
 	}
 }
 
 func TestNotice(t *testing.T) {
-	got := Notice("Denis", []Line{{"", Daging, 1, "no tauge"}, {"", Campur, 0, ""}})
+	got := Notice("Denis", []Line{{"", Daging, 1, "no tauge", ""}, {"", Campur, 0, "", ""}})
 	want := "Halo Kak Denis 👋 orderan Kakak ke Mamang Tangkar sudah diproses ya:\n\n🍲 DAGING 1 SATE (no tauge)\n🍲 CAMPUR\n\nSelamat makan nanti 😋🍢"
 	if got != want {
 		t.Fatalf("got:\n%s\nwant:\n%s", got, want)
@@ -124,5 +124,26 @@ func TestPhone(t *testing.T) {
 		if _, err := Phone(bad); err == nil {
 			t.Errorf("Phone(%q) accepted", bad)
 		}
+	}
+}
+
+func TestFriends(t *testing.T) {
+	got := ShortNames([]Person{
+		{"okky.pratama@bfi.co.id", "Okky"},
+		{FriendKey("Okky"), "Okky"},
+		{FriendKey("pak  Budi"), "pak  Budi"},
+	})
+	if got["okky.pratama@bfi.co.id"] != "OKKY" || got[FriendKey("okky")] != "OKKY" || got[FriendKey("Pak Budi")] != "PAK BUDI" {
+		t.Fatalf("labels: %v", got)
+	}
+	if _, err := CleanFriend("Bapak Direktur Utama X"); err == nil {
+		t.Fatal("long friend name accepted")
+	}
+	if n, _ := CleanFriend("<b>Okky</b>"); n != "bOkkyb" {
+		t.Fatalf("friend not cleaned: %q", n)
+	}
+	msg := Notice("Aris", []Line{{Menu: Daging, Sate: 1, For: "Okky"}, {Menu: Campur}})
+	if !strings.Contains(msg, "🍲 DAGING 1 SATE untuk Okky\n🍲 CAMPUR\n") {
+		t.Fatalf("notice: %s", msg)
 	}
 }

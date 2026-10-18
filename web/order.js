@@ -3,7 +3,8 @@
 const id = location.pathname.split("/").pop();
 let me = null, snap = null, offset = 0, menu = "DAGING", sate = 0, busy = false;
 // mode is what the person is doing: "" just looking (the card), "add" another
-// bowl, "pick" a bowl to change, "edit" the bowl editID.
+// bowl, "friend" a bowl for someone else, "pick" a bowl to change, "edit" the
+// bowl editID.
 let mode = "", editID = 0;
 
 const now = () => Date.now() + offset;
@@ -22,9 +23,14 @@ function setSate(n) {
   goLabel();
 }
 
+function friendName() { return $("for").value.trim(); }
+
 function goLabel() {
   const p = snap ? phase(snap.order, now()) : "open";
-  let s = mode === "edit" ? "Simpan: " : mode === "add" ? (p === "late" ? "Order susulan: " : "Pesan lagi: ") : (p === "late" ? "Pesan susulan: " : "Pesan ");
+  let s = mode === "edit" ? "Simpan: "
+    : mode === "friend" ? "Pesan untuk " + (friendName() || "teman").toUpperCase() + ": "
+    : mode === "add" ? (p === "late" ? "Order susulan: " : "Pesan lagi: ")
+    : (p === "late" ? "Pesan susulan: " : "Pesan ");
   s += menu;
   if (sate) s += " + " + sate + " sate";
   $("go").textContent = s;
@@ -39,19 +45,27 @@ function setMode(m, line) {
   mode = m;
   editID = line ? line.id : 0;
   $("err").textContent = "";
-  if (m === "edit") { setMenu(line.menu); setSate(line.sate); setNote(line.note); }
-  if (m === "add") { setMenu("DAGING"); setSate(0); setNote(""); }
+  if (m === "edit") { setMenu(line.menu); setSate(line.sate); setNote(line.note); setFor(line.for_name); }
+  if (m === "add" || m === "friend") { setMenu("DAGING"); setSate(0); setNote(""); setFor(""); }
   if (snap) renderMine(phase(snap.order, now()));
+  if (m === "friend") $("for").focus();
+}
+
+function setFor(v) {
+  $("for").value = v || "";
+  $("for-count").textContent = [...$("for").value].length + "/20";
 }
 
 async function order() {
   if (busy) return;
   busy = true; $("go").disabled = true; $("err").textContent = "";
   try {
-    const body = { menu, sate, note: $("note").value };
+    const forRow = !$("for-row").hidden;
+    if (mode === "friend" && !friendName()) throw new Error("Isi nama teman dulu ya Kakak");
+    const body = { menu, sate, note: $("note").value, for: forRow ? friendName() : "" };
     if (mode === "edit") await api("PUT", "/api/orders/" + id + "/lines/" + editID, body);
     else await api("POST", "/api/orders/" + id + "/lines", body);
-    setNote(""); setSate(0); setMode("");
+    setNote(""); setSate(0); setFor(""); setMode("");
   } catch (e) { $("err").textContent = e.message; }
   finally { busy = false; $("go").disabled = false; }
 }
@@ -94,7 +108,8 @@ function renderNota() {
     if (k === 0 && phase(snap.order, now()) === "open") status = el("span", {}, "dikirim " + hhmm(snap.order.lock_at));
     return el("div", { class: "sec" },
       el("div", { class: "sec-h" }, el("span", {}, title.toUpperCase()), status),
-      groups.get(k).map(l => el("div", { class: "ln" }, el("span", {}, lineText(l)), el("span", { class: "nm" }, l.name))));
+      groups.get(k).map(l => el("div", { class: "ln" }, el("span", {}, lineText(l)),
+        el("span", { class: "nm" }, l.for_name ? l.for_name + " (via " + l.name + ")" : l.name))));
   });
   const t = snap.totals;
   parts.push(el("div", { class: "tot" },
@@ -120,36 +135,44 @@ function renderMine(p) {
   const changeable = mine.filter(l => canChange(l, p));
   if (mode === "edit" && !changeable.some(l => l.id === editID)) mode = "";
   if (mode === "pick" && !changeable.length) mode = "";
-  if (mode === "add" && !open) mode = "";
+  if ((mode === "add" || mode === "friend") && !open) mode = "";
 
   const card = mine.length > 0 && (mode === "" || mode === "pick");
   $("done").hidden = !card;
   $("machine").hidden = card || (!open && mine.length > 0);
-  $("form-h").hidden = !(mode === "add" || mode === "edit");
+  const editing = mine.find(l => l.id === editID);
+  $("form-h").hidden = !(mode === "add" || mode === "edit" || mode === "friend");
   if (mode === "add") $("form-title").textContent = p === "late" ? "Order susulan" : "Tambah mangkok lagi";
-  if (mode === "edit") $("form-title").textContent = "Ganti: " + lineText(mine.find(l => l.id === editID));
+  if (mode === "friend") $("form-title").textContent = "👥 Orderkan teman";
+  if (mode === "edit") $("form-title").textContent = "Ganti: " + (editing.for_name ? editing.for_name.toUpperCase() + ": " : "") + lineText(editing);
+  $("for-row").hidden = !(mode === "friend" || (mode === "edit" && editing && editing.for_name));
+  $("friend-form").hidden = mode === "edit" || mode === "friend";
 
   const allSent = mine.length > 0 && mine.every(sentLine);
   $("done").className = "done" + (allSent ? " sent" : "");
   $("done-h").textContent = allSent ? "✓ Sudah sampai ke Mamang 😋" : "✓ Pesanan Kakak sudah masuk 😋";
-  $("done-list").replaceChildren(...mine.map(l => el("li", {},
-    el("span", {}, lineText(l),
+  const own = mine.filter(l => !l.for_name), friends = mine.filter(l => l.for_name);
+  const item = l => el("li", {},
+    el("span", {}, (l.for_name ? l.for_name.toUpperCase() + ": " : "") + lineText(l),
       l.late ? el("span", { class: "tag late" }, "susulan") : null,
       sentLine(l) ? el("span", { class: "tag sent" }, "terkirim") : null),
     mode === "pick" && canChange(l, p) ? el("span", { class: "btns" },
       el("button", { class: "del", type: "button", onclick: () => setMode("edit", l) }, "Ganti"),
-      el("button", { class: "del", type: "button", onclick: () => del(l.id) }, "Hapus")) : null)));
+      el("button", { class: "del", type: "button", onclick: () => del(l.id) }, "Hapus")) : null);
+  $("done-list").replaceChildren(...own.map(item),
+    ...(friends.length ? [el("li", { class: "sub" }, "Dipesankan untuk teman"), ...friends.map(item)] : []));
   const waiting = mine.some(l => l.late && l.batch == null);
   $("done-when").textContent = p === "open" ? "Dikirim ke Mamang jam " + hhmm(snap.order.lock_at) + ". Masih bisa diganti sampai jam itu."
     : waiting && snap.cut_at ? "Susulan Kakak dikirim ke Mamang ±" + hhmm(snap.cut_at) + "."
     : "";
   $("pick-hint").hidden = mode !== "pick";
   $("more").hidden = !open || mode === "pick";
-  $("more").textContent = p === "late" ? "+ Order susulan" : "+ Order lagi";
+  $("more").textContent = !own.length ? "+ Order untuk saya" : p === "late" ? "+ Order susulan" : "+ Order lagi";
+  $("friend").hidden = !open || mode === "pick";
   $("change").hidden = !changeable.length;
   $("change").textContent = mode === "pick" ? "Selesai" : "✎ Ganti order";
   $("done-actions").classList.toggle("one", $("more").hidden !== $("change").hidden);
-  $("done-actions").hidden = $("more").hidden && $("change").hidden;
+  $("done-actions").hidden = $("more").hidden && $("change").hidden && $("friend").hidden;
   goLabel();
 }
 
@@ -283,6 +306,9 @@ document.addEventListener("DOMContentLoaded", async () => {
   $("sate-plus").addEventListener("click", () => setSate(sate + 1));
   $("note").addEventListener("input", e => { $("note-count").textContent = [...e.target.value].length + "/10"; });
   $("more").addEventListener("click", () => setMode("add"));
+  $("friend").addEventListener("click", () => setMode("friend"));
+  $("friend-form").addEventListener("click", () => setMode("friend"));
+  $("for").addEventListener("input", () => { $("for-count").textContent = [...$("for").value].length + "/20"; goLabel(); });
   $("cancel").addEventListener("click", () => setMode(""));
   $("change").addEventListener("click", () => {
     if (mode === "pick") return setMode("");
