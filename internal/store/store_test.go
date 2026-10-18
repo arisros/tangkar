@@ -37,7 +37,7 @@ func newStore(t *testing.T) (*Store, *clock) {
 func mustOrder(t *testing.T, s *Store, c *clock) Order {
 	t.Helper()
 	lock, _ := order.ClockOn(c.t, "11:30")
-	o, err := s.CreateOrder(context.Background(), "Soto Tangkar", lock, order.DefaultLate, "aris@bfi.co.id")
+	o, err := s.CreateOrder(context.Background(), "Soto Tangkar", lock, order.DefaultLate, "aris@bfi.co.id", false)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -477,5 +477,34 @@ func TestMigrateOldDatabase(t *testing.T) {
 	}
 	if _, err := Open(path); err != nil {
 		t.Fatalf("second open: %v", err)
+	}
+}
+
+func TestTestOrderAndActedBy(t *testing.T) {
+	ctx := context.Background()
+	s, c := newStore(t)
+	s.UpsertUser(ctx, "aris@bfi.co.id", "Aris")
+	s.UpsertUser(ctx, "uji1@tangkar.test", "Uji 1")
+	lock, _ := order.ClockOn(c.t, "11:30")
+	o, err := s.CreateOrder(ctx, "Uji", lock, order.DefaultLate, "aris@bfi.co.id", true)
+	if err != nil || !o.Test {
+		t.Fatalf("test order: %+v %v", o, err)
+	}
+	if err := s.AddLineAs(ctx, o.ID, "uji1@tangkar.test", "aris@bfi.co.id", order.Line{Menu: order.Daging}); err != nil {
+		t.Fatal(err)
+	}
+	lines, _ := s.Lines(ctx, o.ID)
+	if lines[0].By != "Aris" || lines[0].Name != "Uji 1" {
+		t.Fatalf("acted by: %+v", lines[0])
+	}
+	c.at("11:30")
+	tick(t, s)
+	p := pending(t, s)
+	if len(p) != 1 || !p[0].Test {
+		t.Fatalf("send not marked test: %+v", p)
+	}
+	people, _ := s.People(ctx)
+	if len(people) != 2 {
+		t.Fatalf("people: %+v", people)
 	}
 }

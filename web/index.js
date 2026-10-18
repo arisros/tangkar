@@ -19,7 +19,7 @@ function render() {
       : o.day_label;
     const failed = s.sends.some(x => x.status === "failed");
     return el("a", { class: "ticket", href: "/o/" + o.id },
-      el("div", { class: "t1" }, el("span", {}, o.title), el("span", { class: p === "open" ? "ok" : p === "late" ? "warn" : "" }, label[p])),
+      el("div", { class: "t1" }, el("span", {}, o.title, o.test ? el("span", { class: "tag uji" }, "uji") : null), el("span", { class: p === "open" ? "ok" : p === "late" ? "warn" : "" }, label[p])),
       el("div", { class: "t2" }, when),
       el("div", { class: "t3" }, "DAGING " + s.totals.daging + " · CAMPUR " + s.totals.campur + " · SATE " + s.totals.sate,
         s.viewers ? " · " + s.viewers + " buka" : "", failed ? el("span", { class: "bad" }, " · WA gagal") : null));
@@ -31,7 +31,7 @@ async function create() {
   $("c-go").disabled = true;
   try {
     const r = await api("POST", "/api/orders", {
-      title: $("c-title").value, lock: $("c-lock").value, late_minutes: parseInt($("c-late").value, 10) || 0,
+      title: $("c-title").value, lock: $("c-lock").value, late_minutes: parseInt($("c-late").value, 10) || 0, test: $("c-test").checked,
     });
     $("made").hidden = false;
     $("made-url").textContent = r.url;
@@ -48,6 +48,14 @@ document.addEventListener("DOMContentLoaded", async () => {
   if (me.admin) {
     $("create").hidden = false; $("c-go").addEventListener("click", create);
     $("phones").hidden = false;
+    $("imp").hidden = false;
+    api("GET", "/api/people").then(r => {
+      $("imp-who").replaceChildren(...r.people.map(p => el("option", { value: p.email }, p.name + " · " + p.email)));
+    }).catch(e => { $("imp-err").textContent = e.message; });
+    $("imp-go").addEventListener("click", async () => {
+      try { await api("POST", "/api/impersonate", { email: $("imp-who").value }); location.reload(); }
+      catch (e) { $("imp-err").textContent = e.message; }
+    });
     $("phones-go").addEventListener("click", async () => {
       try {
         const r = await api("POST", "/api/phones", { text: $("phones-in").value });

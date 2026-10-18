@@ -15,6 +15,7 @@ import (
 	"path/filepath"
 	"runtime"
 	"strings"
+	"sync"
 	"time"
 
 	"github.com/arisros/tangkar/internal/order"
@@ -44,15 +45,38 @@ type list struct {
 }
 
 type me struct {
-	Email string `json:"email"`
-	Name  string `json:"name"`
-	Admin bool   `json:"admin"`
+	Email    string `json:"email"`
+	Name     string `json:"name"`
+	Admin    bool   `json:"admin"`
+	ActingAs bool   `json:"acting_as"`
+	RealName string `json:"real_name"`
 }
 
 type client struct {
 	base  string
 	token string
 	http  *http.Client
+
+	mu sync.Mutex
+	as string
+}
+
+// setAs makes every following request act as email; "" stops impersonating.
+func (c *client) setAs(email string) {
+	c.mu.Lock()
+	c.as = email
+	c.mu.Unlock()
+}
+
+func (c *client) header(req *http.Request) {
+	if c.token != "" {
+		req.Header.Set("Authorization", "Bearer "+c.token)
+	}
+	c.mu.Lock()
+	if c.as != "" {
+		req.Header.Set("X-Tangkar-As", c.as)
+	}
+	c.mu.Unlock()
 }
 
 var errLogin = errors.New("login expired")
@@ -82,9 +106,7 @@ func (c *client) do(ctx context.Context, method, path string, in, out any) error
 	if in != nil {
 		req.Header.Set("Content-Type", "application/json")
 	}
-	if c.token != "" {
-		req.Header.Set("Authorization", "Bearer "+c.token)
-	}
+	c.header(req)
 	resp, err := c.http.Do(req)
 	if err != nil {
 		return err
@@ -141,7 +163,7 @@ func (c *client) streamOnce(ctx context.Context, sc *http.Client, path string, o
 		return err
 	}
 	req.Header.Set("Accept", "text/event-stream")
-	req.Header.Set("Authorization", "Bearer "+c.token)
+	c.header(req)
 	resp, err := sc.Do(req)
 	if err != nil {
 		return err

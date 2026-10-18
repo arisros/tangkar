@@ -27,6 +27,7 @@
         <div><label for="c-late">Late join (menit)</label><input id="c-late" type="number" min="0" max="240" value="60" inputmode="numeric"></div>
       </div>
     </div>
+    <label class="check"><input type="checkbox" id="c-test"> 🧪 Pesanan uji (WA ke grup tes, boleh dipakai UJI 1-3)</label>
     <button class="go" type="button" id="c-go">Buka pesanan</button>
     <p class="err" id="c-err" role="alert"></p>
     <div class="made" id="made" hidden>
@@ -37,6 +38,14 @@
         <a class="tool" id="made-open" href="#">Buka</a>
       </div>
     </div>
+  </section>
+
+  <section class="admin" id="imp" hidden>
+    <h2>🎭 Impersonate</h2>
+    <p class="lede">Lihat dan pesan sebagai orang lain selama 30 menit. Semua perubahan tercatat atas nama Kakak. UJI 1-3 hanya bisa di pesanan uji.</p>
+    <div class="form"><select id="imp-who" aria-label="pilih orang"></select></div>
+    <button class="tool" type="button" id="imp-go">Masuk sebagai</button>
+    <p class="err" id="imp-err" role="alert"></p>
   </section>
 
   <section class="admin" id="phones" hidden>

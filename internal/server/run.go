@@ -47,7 +47,11 @@ func (s *Server) deliver(ctx context.Context) {
 			s.log.Error("pending sends", "err", err)
 		}
 		for _, x := range out {
-			sendErr := s.sendWA(ctx, s.cfg.WATo, x.Message)
+			to := s.cfg.WATo
+			if x.Test {
+				to = s.cfg.WATestTo
+			}
+			sendErr := s.sendWA(ctx, to, x.Message)
 			if sendErr != nil {
 				s.log.Warn("wa send failed", "order", x.OrderID, "batch", x.Batch, "err", sendErr)
 			} else {
@@ -87,7 +91,11 @@ func (s *Server) deliverNotices(ctx context.Context) {
 		return
 	}
 	for _, n := range ns {
-		err := s.sendWA(ctx, n.To, n.Message)
+		to := n.To
+		if n.Test {
+			to = ""
+		}
+		err := s.sendWA(ctx, to, n.Message)
 		if err != nil {
 			s.log.Warn("notice failed", "order", n.OrderID, "id", n.ID, "err", err)
 		}

@@ -109,7 +109,7 @@ function renderNota() {
     return el("div", { class: "sec" },
       el("div", { class: "sec-h" }, el("span", {}, title.toUpperCase()), status),
       groups.get(k).map(l => el("div", { class: "ln" }, el("span", {}, lineText(l)),
-        el("span", { class: "nm" }, l.for_name ? l.for_name + " (via " + l.name + ")" : l.name))));
+        el("span", { class: "nm" }, (l.for_name ? l.for_name + " (via " + l.name + ")" : l.name) + (l.acted_by ? " 🎭" + l.acted_by : "")))));
   });
   const t = snap.totals;
   parts.push(el("div", { class: "tot" },
@@ -250,6 +250,7 @@ function render() {
   document.title = o.title + " · Tangkar";
   $("title").textContent = o.title;
   $("day").textContent = o.day_label;
+  $("test-bar").hidden = !o.test;
   const v = snap.viewers;
   $("viewers").textContent = v.length ? "Lagi buka: " + v.slice(0, 4).join(", ") + (v.length > 4 ? " +" + (v.length - 4) : "") : "";
   const p = phase(o, now());

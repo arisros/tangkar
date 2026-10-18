@@ -90,6 +90,7 @@ func serve() error {
 		SecureCookie:       strings.HasPrefix(base, "https://"),
 		DevLogin:           os.Getenv("TANGKAR_DEV_LOGIN") == "1",
 		WATo:               os.Getenv("TANGKAR_WA_TO"),
+		WATestTo:           os.Getenv("TANGKAR_WA_TEST_TO"),
 		WADryRun:           os.Getenv("TANGKAR_WA_DRY_RUN") == "1",
 	}
 	if cfg.DevLogin && cfg.SecureCookie {

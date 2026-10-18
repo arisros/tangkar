@@ -129,13 +129,19 @@ func Open(path string) (*Store, error) {
 
 // migrate adds columns that databases created by older versions lack.
 func migrate(db *sql.DB) error {
-	var n int
-	if err := db.QueryRow(`SELECT count(*) FROM pragma_table_info('lines') WHERE name='for_name'`).Scan(&n); err != nil {
-		return err
-	}
-	if n == 0 {
-		if _, err := db.Exec(`ALTER TABLE lines ADD COLUMN for_name TEXT NOT NULL DEFAULT ''`); err != nil {
+	for _, c := range []struct{ table, column, def string }{
+		{"lines", "for_name", "TEXT NOT NULL DEFAULT ''"},
+		{"lines", "acted_by", "TEXT NOT NULL DEFAULT ''"},
+		{"orders", "test", "INTEGER NOT NULL DEFAULT 0"},
+	} {
+		var n int
+		if err := db.QueryRow(`SELECT count(*) FROM pragma_table_info(?) WHERE name=?`, c.table, c.column).Scan(&n); err != nil {
 			return err
+		}
+		if n == 0 {
+			if _, err := db.Exec(`ALTER TABLE ` + c.table + ` ADD COLUMN ` + c.column + ` ` + c.def); err != nil {
+				return err
+			}
 		}
 	}
 	return nil
@@ -247,6 +253,7 @@ type Order struct {
 	LateUntil time.Time `json:"late_until"`
 	Status    string    `json:"status"`
 	CreatedBy string    `json:"created_by"`
+	Test      bool      `json:"test"`
 }
 
 type Line struct {
@@ -257,6 +264,7 @@ type Line struct {
 	Sate  int    `json:"sate"`
 	Note  string `json:"note"`
 	For   string `json:"for_name"`
+	By    string `json:"acted_by"`
 	Late  bool   `json:"late"`
 	Batch *int   `json:"batch"`
 	At    int64  `json:"at"`
@@ -274,25 +282,27 @@ type Send struct {
 	SentAt  int64  `json:"sent_at"`
 }
 
-func (s *Store) CreateOrder(ctx context.Context, title string, lockAt time.Time, late time.Duration, by string) (Order, error) {
+// CreateOrder opens an order. A test order sends to the test group and only
+// test personas may order in it, alongside real people.
+func (s *Store) CreateOrder(ctx context.Context, title string, lockAt time.Time, late time.Duration, by string, test bool) (Order, error) {
 	if !lockAt.After(s.Now()) {
 		return Order{}, ErrPast
 	}
 	id := randomID(6, slugChars)
-	_, err := s.db.ExecContext(ctx, `INSERT INTO orders(id,title,lock_at,late_until,status,created_by,created_at) VALUES(?,?,?,?,?,?,?)`,
-		id, title, lockAt.Unix(), lockAt.Add(late).Unix(), order.StatusOpen, by, s.Now().Unix())
+	_, err := s.db.ExecContext(ctx, `INSERT INTO orders(id,title,lock_at,late_until,status,created_by,created_at,test) VALUES(?,?,?,?,?,?,?,?)`,
+		id, title, lockAt.Unix(), lockAt.Add(late).Unix(), order.StatusOpen, by, s.Now().Unix(), test)
 	if err != nil {
 		return Order{}, err
 	}
 	return s.Order(ctx, id)
 }
 
-const orderCols = `id,title,lock_at,late_until,status,created_by`
+const orderCols = `id,title,lock_at,late_until,status,created_by,test`
 
 func scanOrder(sc interface{ Scan(...any) error }) (Order, error) {
 	var o Order
 	var lockAt, lateUntil int64
-	if err := sc.Scan(&o.ID, &o.Title, &lockAt, &lateUntil, &o.Status, &o.CreatedBy); err != nil {
+	if err := sc.Scan(&o.ID, &o.Title, &lockAt, &lateUntil, &o.Status, &o.CreatedBy, &o.Test); err != nil {
 		if errors.Is(err, sql.ErrNoRows) {
 			return Order{}, ErrNotFound
 		}
@@ -331,8 +341,8 @@ func (s *Store) Running(ctx context.Context) ([]Order, error) {
 }
 
 func (s *Store) Lines(ctx context.Context, orderID string) ([]Line, error) {
-	rows, err := s.db.QueryContext(ctx, `SELECT l.id,l.email,COALESCE(u.name,l.email),l.menu,l.sate,l.note,l.for_name,l.late,l.batch,l.created_at
-		FROM lines l LEFT JOIN users u ON u.email=l.email WHERE l.order_id=? ORDER BY l.id`, orderID)
+	rows, err := s.db.QueryContext(ctx, `SELECT l.id,l.email,COALESCE(u.name,l.email),l.menu,l.sate,l.note,l.for_name,COALESCE(a.name,l.acted_by),l.late,l.batch,l.created_at
+		FROM lines l LEFT JOIN users u ON u.email=l.email LEFT JOIN users a ON a.email=l.acted_by AND l.acted_by<>'' WHERE l.order_id=? ORDER BY l.id`, orderID)
 	if err != nil {
 		return nil, err
 	}
@@ -341,7 +351,7 @@ func (s *Store) Lines(ctx context.Context, orderID string) ([]Line, error) {
 	for rows.Next() {
 		var l Line
 		var batch sql.NullInt64
-		if err := rows.Scan(&l.ID, &l.Email, &l.Name, &l.Menu, &l.Sate, &l.Note, &l.For, &l.Late, &batch, &l.At); err != nil {
+		if err := rows.Scan(&l.ID, &l.Email, &l.Name, &l.Menu, &l.Sate, &l.Note, &l.For, &l.By, &l.Late, &batch, &l.At); err != nil {
 			return nil, err
 		}
 		if batch.Valid {
@@ -373,6 +383,11 @@ func (s *Store) Sends(ctx context.Context, orderID string) ([]Send, error) {
 // AddLine is the hardlock: the clock is checked inside the transaction, so a
 // request that arrives at 11:30:00 lands as a late line or not at all.
 func (s *Store) AddLine(ctx context.Context, orderID, email string, l order.Line) error {
+	return s.AddLineAs(ctx, orderID, email, "", l)
+}
+
+// AddLineAs records actedBy, the admin who placed it while impersonating email.
+func (s *Store) AddLineAs(ctx context.Context, orderID, email, actedBy string, l order.Line) error {
 	tx, err := s.db.BeginTx(ctx, nil)
 	if err != nil {
 		return err
@@ -400,8 +415,8 @@ func (s *Store) AddLine(ctx context.Context, orderID, email string, l order.Line
 	if n >= order.MaxLines {
 		return ErrTooMany
 	}
-	if _, err := tx.ExecContext(ctx, `INSERT INTO lines(order_id,email,menu,sate,note,for_name,late,batch,created_at) VALUES(?,?,?,?,?,?,?,?,?)`,
-		orderID, email, l.Menu, l.Sate, l.Note, l.For, late, batch, now.Unix()); err != nil {
+	if _, err := tx.ExecContext(ctx, `INSERT INTO lines(order_id,email,menu,sate,note,for_name,acted_by,late,batch,created_at) VALUES(?,?,?,?,?,?,?,?,?,?)`,
+		orderID, email, l.Menu, l.Sate, l.Note, l.For, actedBy, late, batch, now.Unix()); err != nil {
 		return err
 	}
 	return tx.Commit()
@@ -418,14 +433,41 @@ func (s *Store) DeleteLine(ctx context.Context, orderID string, lineID int64, em
 // UpdateLine lets an owner change their mind about a bowl until it has gone to
 // the seller. A changed late bowl counts as fresh activity for the debounce.
 func (s *Store) UpdateLine(ctx context.Context, orderID string, lineID int64, email string, l order.Line) error {
+	return s.UpdateLineAs(ctx, orderID, lineID, email, "", l)
+}
+
+func (s *Store) UpdateLineAs(ctx context.Context, orderID string, lineID int64, email, actedBy string, l order.Line) error {
 	return s.changeLine(ctx, orderID, lineID, email, func(tx *sql.Tx, late bool) error {
 		at := "created_at"
 		if late {
 			at = fmt.Sprint(s.Now().Unix())
 		}
-		_, err := tx.ExecContext(ctx, `UPDATE lines SET menu=?, sate=?, note=?, for_name=?, created_at=`+at+` WHERE id=?`, l.Menu, l.Sate, l.Note, l.For, lineID)
+		_, err := tx.ExecContext(ctx, `UPDATE lines SET menu=?, sate=?, note=?, for_name=?, acted_by=?, created_at=`+at+` WHERE id=?`, l.Menu, l.Sate, l.Note, l.For, actedBy, lineID)
 		return err
 	})
+}
+
+type Person struct {
+	Email string `json:"email"`
+	Name  string `json:"name"`
+}
+
+// People lists everyone who has signed in, for the admin's impersonate picker.
+func (s *Store) People(ctx context.Context) ([]Person, error) {
+	rows, err := s.db.QueryContext(ctx, `SELECT email,name FROM users ORDER BY name`)
+	if err != nil {
+		return nil, err
+	}
+	defer rows.Close()
+	out := []Person{}
+	for rows.Next() {
+		var p Person
+		if err := rows.Scan(&p.Email, &p.Name); err != nil {
+			return nil, err
+		}
+		out = append(out, p)
+	}
+	return out, rows.Err()
 }
 
 // changeLine runs fn on someone's own bowl inside the same transaction that
@@ -684,14 +726,15 @@ type Outbox struct {
 	OrderID string
 	Batch   int
 	Message string
+	Test    bool
 }
 
 // MaxAttempts bounds automatic retries; after that a send waits for an admin.
 const MaxAttempts = 5
 
 func (s *Store) PendingSends(ctx context.Context) ([]Outbox, error) {
-	rows, err := s.db.QueryContext(ctx, `SELECT order_id,batch,message FROM sends
-		WHERE status=? OR (status=? AND attempts<? AND next_try<=?) ORDER BY order_id,batch`,
+	rows, err := s.db.QueryContext(ctx, `SELECT x.order_id,x.batch,x.message,o.test FROM sends x JOIN orders o ON o.id=x.order_id
+		WHERE x.status=? OR (x.status=? AND x.attempts<? AND x.next_try<=?) ORDER BY x.order_id,x.batch`,
 		order.SendPending, order.SendFailed, MaxAttempts, s.Now().Unix())
 	if err != nil {
 		return nil, err
@@ -700,7 +743,7 @@ func (s *Store) PendingSends(ctx context.Context) ([]Outbox, error) {
 	var out []Outbox
 	for rows.Next() {
 		var x Outbox
-		if err := rows.Scan(&x.OrderID, &x.Batch, &x.Message); err != nil {
+		if err := rows.Scan(&x.OrderID, &x.Batch, &x.Message, &x.Test); err != nil {
 			return nil, err
 		}
 		out = append(out, x)

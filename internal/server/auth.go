@@ -33,6 +33,9 @@ type User struct {
 	Email string
 	Name  string
 	Admin bool
+	// Real is the admin's own email while they impersonate Email.
+	Real     string
+	RealName string
 }
 
 type session struct{ key []byte }
@@ -266,7 +269,13 @@ func (s *Server) user(r *http.Request) (User, bool) {
 			return User{}, false
 		}
 	}
-	return User{Email: email, Name: s.store.UserName(r.Context(), email), Admin: s.cfg.Admins[email]}, true
+	u := User{Email: email, Name: s.store.UserName(r.Context(), email), Admin: s.cfg.Admins[email]}
+	if u.Admin {
+		if as := s.impersonating(r, email); as != "" {
+			return User{Email: as, Name: s.store.UserName(r.Context(), as), Real: email, RealName: u.Name}, true
+		}
+	}
+	return u, true
 }
 
 func clip(s string, n int) string {

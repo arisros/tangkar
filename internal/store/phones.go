@@ -136,11 +136,12 @@ type Notice struct {
 	OrderID string
 	To      string
 	Message string
+	Test    bool
 }
 
 func (s *Store) PendingNotices(ctx context.Context) ([]Notice, error) {
-	rows, err := s.db.QueryContext(ctx, `SELECT id,order_id,msisdn,message FROM notices
-		WHERE status=? OR (status=? AND attempts<? AND next_try<=?) ORDER BY id`,
+	rows, err := s.db.QueryContext(ctx, `SELECT n.id,n.order_id,n.msisdn,n.message,o.test FROM notices n JOIN orders o ON o.id=n.order_id
+		WHERE n.status=? OR (n.status=? AND n.attempts<? AND n.next_try<=?) ORDER BY n.id`,
 		order.SendPending, order.SendFailed, MaxAttempts, s.Now().Unix())
 	if err != nil {
 		return nil, err
@@ -149,7 +150,7 @@ func (s *Store) PendingNotices(ctx context.Context) ([]Notice, error) {
 	var out []Notice
 	for rows.Next() {
 		var n Notice
-		if err := rows.Scan(&n.ID, &n.OrderID, &n.To, &n.Message); err != nil {
+		if err := rows.Scan(&n.ID, &n.OrderID, &n.To, &n.Message, &n.Test); err != nil {
 			return nil, err
 		}
 		out = append(out, n)

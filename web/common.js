@@ -79,5 +79,11 @@ async function whoami() {
   const me = await api("GET", "/api/me");
   const who = $("who");
   if (who) who.replaceChildren(me.name, " · ", el("a", { href: "/auth/logout" }, "keluar"));
+  if (me.acting_as) {
+    const stop = async () => { await api("POST", "/api/impersonate/stop", {}); location.reload(); };
+    document.querySelector("main").prepend(el("div", { class: "as-bar", role: "status" },
+      el("span", {}, "🎭 Sebagai " + me.name),
+      el("button", { type: "button", class: "link", onclick: stop }, "kembali ke " + me.real_name)));
+  }
   return me;
 }

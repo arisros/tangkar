@@ -74,6 +74,7 @@ const (
 	viewList view = iota
 	viewOrder
 	viewCreate
+	viewPeople
 )
 
 type prompt int
@@ -118,6 +119,10 @@ type model struct {
 
 	form   []textinput.Model
 	formAt int
+
+	people  []store.Person
+	pickP   int
+	asSince time.Time
 
 	status string
 	bad    bool
@@ -209,7 +214,29 @@ func (m *model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 	case tea.WindowSizeMsg:
 		m.width, m.height = msg.Width, msg.Height
 	case tickMsg:
+		if m.me.ActingAs && time.Since(m.asSince) > 30*time.Minute {
+			return m, tea.Batch(tick(), m.actAs(""))
+		}
 		return m, tick()
+	case peopleMsg:
+		if msg.err != nil {
+			m.flash("", msg.err)
+			break
+		}
+		m.people, m.pickP, m.view = msg.people, 0, viewPeople
+	case actingMsg:
+		if msg.err != nil {
+			m.flash("", msg.err)
+			break
+		}
+		m.me = msg.me
+		m.view = viewList
+		m.asSince = time.Now()
+		if m.me.ActingAs {
+			m.flash("🎭 sekarang sebagai "+m.me.Name, nil)
+		} else {
+			m.flash("kembali sebagai "+m.me.Name, nil)
+		}
 	case listMsg:
 		m.list = list(msg)
 		m.offset = time.Until(time.UnixMilli(msg.Now))
@@ -268,6 +295,20 @@ func (m *model) key(k tea.KeyMsg) (tea.Model, tea.Cmd) {
 		return m, tea.Batch(cmds...)
 	}
 	switch m.view {
+	case viewPeople:
+		switch k.String() {
+		case "esc", "q":
+			m.view = viewList
+		case "up", "k":
+			m.pickP = max(0, m.pickP-1)
+		case "down", "j":
+			m.pickP = min(len(m.people)-1, m.pickP+1)
+		case "enter":
+			if m.pickP < len(m.people) {
+				return m, m.actAs(m.people[m.pickP].Email)
+			}
+		}
+		return m, nil
 	case viewCreate:
 		return m.createKey(k)
 	case viewOrder:
@@ -303,6 +344,13 @@ func (m *model) listKey(k tea.KeyMsg) (tea.Model, tea.Cmd) {
 		if m.me.Admin {
 			m.startCreate()
 		}
+	case "I":
+		if m.me.ActingAs {
+			return m, m.actAs("")
+		}
+		if m.me.Admin {
+			return m, m.loadPeople()
+		}
 	}
 	return m, nil
 }
@@ -319,6 +367,7 @@ func (m *model) startCreate() {
 		mk("Judul", "Soto Tangkar", 40),
 		mk("Jam tutup", order.DefaultLock, 5),
 		mk("Late join (menit)", "60", 3),
+		mk("Uji? (y/n)", "n", 1),
 	}
 	m.formAt = 0
 	m.form[0].Focus()
@@ -346,7 +395,8 @@ func (m *model) createKey(k tea.KeyMsg) (tea.Model, tea.Cmd) {
 			m.flash("", errors.New("late join harus angka menit"))
 			return m, nil
 		}
-		body := map[string]any{"title": m.form[0].Value(), "lock": strings.TrimSpace(m.form[1].Value()), "late_minutes": late}
+		test := strings.EqualFold(strings.TrimSpace(m.form[3].Value()), "y")
+		body := map[string]any{"title": m.form[0].Value(), "lock": strings.TrimSpace(m.form[1].Value()), "late_minutes": late, "test": test}
 		return m, func() tea.Msg {
 			var out struct {
 				URL   string      `json:"url"`
@@ -364,6 +414,44 @@ func (m *model) createKey(k tea.KeyMsg) (tea.Model, tea.Cmd) {
 }
 
 type createdMsg struct{ url, id string }
+
+type peopleMsg struct {
+	people []store.Person
+	err    error
+}
+
+type actingMsg struct {
+	me  me
+	err error
+}
+
+func (m *model) loadPeople() tea.Cmd {
+	return func() tea.Msg {
+		var out struct {
+			People []store.Person `json:"people"`
+		}
+		err := m.c.call(http.MethodGet, "/api/people", nil, &out)
+		return peopleMsg{people: out.People, err: err}
+	}
+}
+
+// actAs switches the client to email ("" to stop) and reloads who we are.
+func (m *model) actAs(email string) tea.Cmd {
+	return func() tea.Msg {
+		if email == "" {
+			_ = m.c.call(http.MethodPost, "/api/impersonate/stop", map[string]string{}, nil)
+			m.c.setAs("")
+		} else {
+			if err := m.c.call(http.MethodPost, "/api/impersonate", map[string]string{"email": email}, nil); err != nil {
+				return actingMsg{err: err}
+			}
+			m.c.setAs(email)
+		}
+		var who me
+		err := m.c.call(http.MethodGet, "/api/me", nil, &who)
+		return actingMsg{me: who, err: err}
+	}
+}
 
 func (m *model) mine() []store.Line {
 	if m.snap == nil {
@@ -724,8 +812,24 @@ func (m *model) View() string {
 		live = m.liveO
 	}
 	b.WriteString(row(sInk.Render("🍲 TANGKAR"), dot(live)+"  "+sMuted.Render(who), w) + "\n")
-	b.WriteString(sMuted.Render(strings.Repeat("═", w)) + "\n\n")
+	b.WriteString(sMuted.Render(strings.Repeat("═", w)) + "\n")
+	if m.me.ActingAs {
+		left := 30*time.Minute - time.Since(m.asSince)
+		b.WriteString(lipgloss.NewStyle().Width(w).Background(lipgloss.Color("221")).Foreground(lipgloss.Color("16")).Bold(true).Padding(0, 1).
+			Render(row("🎭 SEBAGAI "+strings.ToUpper(m.me.Name), fmt.Sprintf("%d mnt · I kembali ke %s", int(left.Minutes())+1, m.me.RealName), w-2)) + "\n")
+	}
+	b.WriteString("\n")
 	switch m.view {
+	case viewPeople:
+		b.WriteString(sInk.Render("🎭 IMPERSONATE") + "\n" + sMuted.Render("30 menit, semua perubahan tercatat atas nama Kakak. UJI 1-3 hanya di pesanan uji.") + "\n\n")
+		for i, p := range m.people {
+			item := fmt.Sprintf(" %-16s %s ", p.Name, sMuted.Render(p.Email))
+			if i == m.pickP {
+				item = sSel.Render(fmt.Sprintf(" %-16s %s ", p.Name, p.Email))
+			}
+			b.WriteString(item + "\n")
+		}
+		b.WriteString("\n" + keys(w, "↑↓", "pilih", "enter", "masuk sebagai", "esc", "batal") + "\n")
 	case viewCreate:
 		m.viewCreate(&b, w)
 	case viewOrder:
@@ -783,7 +887,11 @@ func (m *model) viewList(b *strings.Builder, w int) {
 			}
 		}
 		tw := w - 4
-		body := row(sInk.Render(strings.ToUpper(o.Title)), st.Bold(true).Render(phaseLabel[p]), tw) + "\n" +
+		head := sInk.Render(strings.ToUpper(o.Title))
+		if o.Test {
+			head += sAmber.Render(" UJI")
+		}
+		body := row(head, st.Bold(true).Render(phaseLabel[p]), tw) + "\n" +
 			sMuted.Render(when) + "\n" + totals
 		card := lipgloss.NewStyle().Border(lipgloss.RoundedBorder()).BorderForeground(lipgloss.Color("240")).Padding(0, 1).Width(w - 2)
 		if i == m.cursor {
@@ -794,7 +902,10 @@ func (m *model) viewList(b *strings.Builder, w int) {
 	b.WriteString("\n")
 	pairs := []string{"↑↓", "pilih", "enter", "buka", "c", "salin link"}
 	if m.me.Admin {
-		pairs = append(pairs, "n", "baru")
+		pairs = append(pairs, "n", "baru", "I", "impersonate")
+	}
+	if m.me.ActingAs {
+		pairs = append(pairs, "I", "kembali")
 	}
 	b.WriteString(keys(w, append(pairs, "q", "keluar")...) + "\n")
 }
@@ -871,7 +982,11 @@ func (m *model) viewOrder(b *strings.Builder, w int) {
 	}
 	s, o, now := m.snap, m.snap.Order, m.now()
 	p := phaseOf(o, now)
-	b.WriteString(sInk.Render(strings.ToUpper(o.Title)) + "\n")
+	title := sInk.Render(strings.ToUpper(o.Title))
+	if o.Test {
+		title += "  " + lipgloss.NewStyle().Background(lipgloss.Color("221")).Foreground(lipgloss.Color("16")).Bold(true).Render(" UJI · WA ke grup tes ")
+	}
+	b.WriteString(title + "\n")
 	b.WriteString(sMuted.Render(o.DayLabel) + "\n\n")
 	b.WriteString(m.board(w, o, p, now) + "\n")
 	if p == "late" {
@@ -993,6 +1108,9 @@ func (m *model) nota(w int) string {
 		name := l.Name
 		if l.For != "" {
 			name = l.For + " (via " + l.Name + ")"
+		}
+		if l.By != "" {
+			name += " 🎭" + l.By
 		}
 		b.WriteString(row(l.Order().String(), sMuted.Render(name), w) + "\n")
 	}

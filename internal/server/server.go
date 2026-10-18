@@ -32,6 +32,7 @@ type Config struct {
 	SecureCookie       bool
 	DevLogin           bool
 	WATo               string
+	WATestTo           string
 	WADryRun           bool
 }
 
@@ -140,6 +141,9 @@ func (s *Server) Handler() http.Handler {
 	m.HandleFunc("POST /api/phone/verify", s.api(s.handlePhoneVerify))
 	m.HandleFunc("DELETE /api/phone", s.api(s.handlePhoneDelete))
 	m.HandleFunc("POST /api/phones", s.admin(s.handlePhoneImport))
+	m.HandleFunc("GET /api/people", s.api(s.handlePeople))
+	m.HandleFunc("POST /api/impersonate", s.api(s.handleImpersonate))
+	m.HandleFunc("POST /api/impersonate/stop", s.api(s.handleImpersonateStop))
 	return s.secure(m)
 }
 
@@ -232,7 +236,7 @@ func (s *Server) fail(w http.ResponseWriter, err error) {
 	switch {
 	case errors.Is(err, store.ErrNotFound):
 		writeErr(w, http.StatusNotFound, err.Error())
-	case errors.Is(err, store.ErrClosed), errors.Is(err, store.ErrSent), errors.Is(err, store.ErrTooMany), errors.Is(err, store.ErrPast):
+	case errors.Is(err, store.ErrClosed), errors.Is(err, store.ErrSent), errors.Is(err, store.ErrTooMany), errors.Is(err, store.ErrPast), errors.Is(err, errPersona):
 		writeErr(w, http.StatusConflict, err.Error())
 	default:
 		s.log.Error("request failed", "err", err)
@@ -264,7 +268,8 @@ func (s *Server) handleHealth(w http.ResponseWriter, r *http.Request) {
 
 func (s *Server) handleMe(w http.ResponseWriter, r *http.Request, u User) {
 	phone, _ := s.store.Phone(r.Context(), u.Email)
-	writeJSON(w, http.StatusOK, map[string]any{"email": u.Email, "name": u.Name, "admin": u.Admin, "phone": maskPhone(phone)})
+	writeJSON(w, http.StatusOK, map[string]any{"email": u.Email, "name": u.Name, "admin": u.Admin, "phone": maskPhone(phone),
+		"acting_as": u.Real != "", "real_name": u.RealName})
 }
 
 func maskPhone(p string) string {
@@ -453,6 +458,7 @@ func (s *Server) handleCreate(w http.ResponseWriter, r *http.Request, u User) {
 		Title       string `json:"title"`
 		Lock        string `json:"lock"`
 		LateMinutes *int   `json:"late_minutes"`
+		Test        bool   `json:"test"`
 	}
 	if !readJSON(w, r, &in) {
 		return
@@ -477,12 +483,12 @@ func (s *Server) handleCreate(w http.ResponseWriter, r *http.Request, u User) {
 		}
 		late = time.Duration(*in.LateMinutes) * time.Minute
 	}
-	o, err := s.store.CreateOrder(r.Context(), title, lock, late, u.Email)
+	o, err := s.store.CreateOrder(r.Context(), title, lock, late, u.Email, in.Test)
 	if err != nil {
 		s.fail(w, err)
 		return
 	}
-	s.log.Info("order created", "order", o.ID, "by", u.Email, "lock", lock)
+	s.log.Info("order created", "order", o.ID, "by", u.Email, "lock", lock, "test", in.Test)
 	s.changed(o.ID)
 	writeJSON(w, http.StatusCreated, map[string]any{"order": o, "url": s.cfg.BaseURL + "/o/" + o.ID})
 }
@@ -522,7 +528,11 @@ func (s *Server) handleAddLine(w http.ResponseWriter, r *http.Request, u User) {
 		return
 	}
 	id := r.PathValue("id")
-	if err := s.store.AddLine(r.Context(), id, u.Email, l); err != nil {
+	if err := s.guardWrite(r.Context(), u, id, "add"); err != nil {
+		s.fail(w, err)
+		return
+	}
+	if err := s.store.AddLineAs(r.Context(), id, u.Email, u.Real, l); err != nil {
 		s.fail(w, err)
 		return
 	}
@@ -541,7 +551,11 @@ func (s *Server) handleUpdateLine(w http.ResponseWriter, r *http.Request, u User
 		return
 	}
 	id := r.PathValue("id")
-	if err := s.store.UpdateLine(r.Context(), id, lineID, u.Email, l); err != nil {
+	if err := s.guardWrite(r.Context(), u, id, "update"); err != nil {
+		s.fail(w, err)
+		return
+	}
+	if err := s.store.UpdateLineAs(r.Context(), id, lineID, u.Email, u.Real, l); err != nil {
 		s.fail(w, err)
 		return
 	}
@@ -556,6 +570,10 @@ func (s *Server) handleDeleteLine(w http.ResponseWriter, r *http.Request, u User
 		return
 	}
 	id := r.PathValue("id")
+	if err := s.guardWrite(r.Context(), u, id, "delete"); err != nil {
+		s.fail(w, err)
+		return
+	}
 	if err := s.store.DeleteLine(r.Context(), id, lineID, u.Email); err != nil {
 		s.fail(w, err)
 		return
