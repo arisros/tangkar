@@ -8,6 +8,7 @@ import (
 	"net/http"
 	"os"
 	"os/signal"
+	"runtime/debug"
 	"strings"
 	"syscall"
 	"time"
@@ -34,6 +35,9 @@ TUI env: TANGKAR_URL (default https://tangkar.arisjirat.com)
 `
 
 func main() {
+	if bi, ok := debug.ReadBuildInfo(); ok && version == "dev" && bi.Main.Version != "" && bi.Main.Version != "(devel)" {
+		version = bi.Main.Version
+	}
 	cmd := "tui"
 	if len(os.Args) > 1 {
 		cmd = os.Args[1]

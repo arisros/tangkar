@@ -11,7 +11,9 @@ import (
 	"encoding/json"
 	"errors"
 	"fmt"
+	"html"
 	"net/http"
+	"net/url"
 	"strconv"
 	"strings"
 	"time"
@@ -88,22 +90,31 @@ func safeNext(next string) string {
 	return next
 }
 
+// Each login attempt gets its own state cookie, so a second tap or a restored
+// tab cannot overwrite the attempt Google is about to return to. The state
+// itself is signed and carries the return path, which lets the callback start
+// over once when the cookie stayed behind in another browser (an in-app
+// browser handing off to Chrome or Safari).
 func (s *Server) handleLogin(w http.ResponseWriter, r *http.Request) {
 	if s.oauth == nil {
 		http.Error(w, "login belum dikonfigurasi", http.StatusServiceUnavailable)
 		return
 	}
 	nonce := randomHex(16)
-	next := safeNext(r.URL.Query().Get("next"))
+	retry := "0"
+	if r.URL.Query().Get("retry") == "1" {
+		retry = "1"
+	}
+	payload := nonce + "." + base64.RawURLEncoding.EncodeToString([]byte(safeNext(r.URL.Query().Get("next")))) + "." + retry
 	http.SetCookie(w, &http.Cookie{
-		Name: stateCookie, Value: nonce + "|" + base64.RawURLEncoding.EncodeToString([]byte(next)),
+		Name: stateCookie + "_" + nonce[:12], Value: nonce,
 		Path: "/auth", HttpOnly: true, Secure: s.cfg.SecureCookie, SameSite: http.SameSiteLaxMode, MaxAge: 600,
 	})
 	opts := []oauth2.AuthCodeOption{oauth2.AccessTypeOnline, oauth2.SetAuthURLParam("prompt", "select_account")}
 	if s.cfg.AllowedDomain != "" {
 		opts = append(opts, oauth2.SetAuthURLParam("hd", s.cfg.AllowedDomain))
 	}
-	http.Redirect(w, r, s.oauth.AuthCodeURL(nonce, opts...), http.StatusFound)
+	http.Redirect(w, r, s.oauth.AuthCodeURL(payload+"."+s.sess.sign(payload), opts...), http.StatusFound)
 }
 
 func (s *Server) handleCallback(w http.ResponseWriter, r *http.Request) {
@@ -111,19 +122,31 @@ func (s *Server) handleCallback(w http.ResponseWriter, r *http.Request) {
 		http.Error(w, "login belum dikonfigurasi", http.StatusServiceUnavailable)
 		return
 	}
-	c, err := r.Cookie(stateCookie)
-	nonce, nextB64, _ := strings.Cut(func() string {
-		if err != nil {
-			return ""
-		}
-		return c.Value
-	}(), "|")
-	if nonce == "" || subtle.ConstantTimeCompare([]byte(nonce), []byte(r.URL.Query().Get("state"))) != 1 {
-		http.Error(w, "sesi login kedaluwarsa, coba lagi", http.StatusBadRequest)
+	parts := strings.Split(r.URL.Query().Get("state"), ".")
+	if len(parts) != 4 || len(parts[0]) != 32 || !hmac.Equal([]byte(parts[3]), []byte(s.sess.sign(strings.Join(parts[:3], ".")))) {
+		s.loginTrouble(w, "/")
 		return
 	}
-	http.SetCookie(w, &http.Cookie{Name: stateCookie, Path: "/auth", MaxAge: -1})
-	nextRaw, _ := base64.RawURLEncoding.DecodeString(nextB64)
+	nonce, retry := parts[0], parts[2]
+	nextRaw, _ := base64.RawURLEncoding.DecodeString(parts[1])
+	next := safeNext(string(nextRaw))
+	if r.URL.Query().Get("error") != "" {
+		s.loginTrouble(w, next)
+		return
+	}
+	cookie := stateCookie + "_" + nonce[:12]
+	c, err := r.Cookie(cookie)
+	if err != nil || subtle.ConstantTimeCompare([]byte(c.Value), []byte(nonce)) != 1 {
+		if retry == "0" {
+			s.log.Info("login cookie missing, starting over", "ua", r.UserAgent())
+			http.Redirect(w, r, "/auth/login?retry=1&next="+url.QueryEscape(next), http.StatusFound)
+			return
+		}
+		s.log.Warn("login cookie missing after retry", "ua", r.UserAgent())
+		s.loginTrouble(w, next)
+		return
+	}
+	http.SetCookie(w, &http.Cookie{Name: cookie, Path: "/auth", MaxAge: -1})
 
 	ctx, cancel := context.WithTimeout(r.Context(), 15*time.Second)
 	defer cancel()
@@ -160,7 +183,7 @@ func (s *Server) handleCallback(w http.ResponseWriter, r *http.Request) {
 	}
 	s.setSession(w, email)
 	s.log.Info("login", "email", email)
-	http.Redirect(w, r, safeNext(string(nextRaw)), http.StatusFound)
+	http.Redirect(w, r, next, http.StatusFound)
 }
 
 func (s *Server) setSession(w http.ResponseWriter, email string) {
@@ -252,4 +275,21 @@ func clip(s string, n int) string {
 		r = r[:n]
 	}
 	return string(r)
+}
+
+const troublePage = `<!doctype html>
+<html lang="id"><head><meta charset="utf-8"><meta name="viewport" content="width=device-width, initial-scale=1">
+<title>Tangkar</title><link rel="stylesheet" href="/static/style.css"></head>
+<body><main>
+<header class="top"><h1 class="brand"><a href="/">Tangkar</a></h1></header>
+<p class="lede">Login belum berhasil, Kakak 🙏</p>
+<p class="lede">Biasanya karena link dibuka dari browser di dalam aplikasi (WhatsApp, Telegram, Gmail). Buka link ini di Chrome atau Safari, lalu coba lagi.</p>
+<a class="go" href="/auth/login?next=%s">Coba lagi</a>
+</main></body></html>`
+
+func (s *Server) loginTrouble(w http.ResponseWriter, next string) {
+	w.Header().Set("Content-Type", "text/html; charset=utf-8")
+	w.Header().Set("Cache-Control", "no-store")
+	w.WriteHeader(http.StatusBadRequest)
+	fmt.Fprintf(w, troublePage, html.EscapeString(url.QueryEscape(next)))
 }
