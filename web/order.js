@@ -25,6 +25,15 @@ function setSate(n) {
 
 function friendName() { return $("for").value.trim(); }
 
+// friendTitle turns the form title into a notice while ordering for someone
+// else, so nobody mistakes it for their own bowl.
+function friendTitle() {
+  const editingFriend = mode === "edit" && snap && (snap.lines.find(l => l.id === editID) || {}).for_name;
+  const on = mode === "friend" || !!editingFriend;
+  $("form-h").classList.toggle("notice", on);
+  if (mode === "friend") $("form-title").textContent = "Lagi orderkan teman" + (friendName() ? ": " + friendName().toUpperCase() : "");
+}
+
 function goLabel() {
   const p = snap ? phase(snap.order, now()) : "open";
   let s = mode === "edit" ? "Simpan: "
@@ -38,7 +47,7 @@ function goLabel() {
 
 function setNote(v) {
   $("note").value = v;
-  $("note-count").textContent = [...v].length + "/10";
+  $("note-count").textContent = [...v].length + "/20";
 }
 
 function setMode(m, line) {
@@ -108,8 +117,14 @@ function renderNota() {
     if (k === 0 && phase(snap.order, now()) === "open") status = el("span", {}, "dikirim " + hhmm(snap.order.lock_at));
     return el("div", { class: "sec" },
       el("div", { class: "sec-h" }, el("span", {}, title.toUpperCase()), status),
-      groups.get(k).map(l => el("div", { class: "ln" }, el("span", {}, lineText(l)),
-        el("span", { class: "nm" }, (l.for_name ? l.for_name + " (via " + l.name + ")" : l.name) + (l.acted_by ? " 🎭" + l.acted_by : "")))));
+      groups.get(k).map(l => l.for_name
+        ? el("div", { class: "friend" },
+          el("div", { class: "ln" },
+            el("span", { class: "who" }, el("span", { class: "badge sm" }, "+1"), l.for_name.toUpperCase()),
+            el("span", { class: "via" }, "dipesankan " + l.name + (l.acted_by ? " 🎭" + l.acted_by : ""))),
+          el("div", {}, lineText(l)))
+        : el("div", { class: "ln" }, el("span", {}, lineText(l)),
+          el("span", { class: "nm" }, l.name + (l.acted_by ? " 🎭" + l.acted_by : "")))));
   });
   const t = snap.totals;
   parts.push(el("div", { class: "tot" },
@@ -143,8 +158,8 @@ function renderMine(p) {
   const editing = mine.find(l => l.id === editID);
   $("form-h").hidden = !(mode === "add" || mode === "edit" || mode === "friend");
   if (mode === "add") $("form-title").textContent = p === "late" ? "Order susulan" : "Tambah mangkok lagi";
-  if (mode === "friend") $("form-title").textContent = "Orderkan teman";
   if (mode === "edit") $("form-title").textContent = "Ganti: " + (editing.for_name ? editing.for_name.toUpperCase() + ": " : "") + lineText(editing);
+  friendTitle();
   $("for-row").hidden = !(mode === "friend" || (mode === "edit" && editing && editing.for_name));
   $("friend-form").hidden = mode === "edit" || mode === "friend";
 
@@ -152,8 +167,8 @@ function renderMine(p) {
   $("done").className = "done" + (allSent ? " sent" : "");
   $("done-h").textContent = allSent ? "✓ Sudah sampai ke Mamang 😋" : "✓ Pesanan Kakak sudah masuk 😋";
   const own = mine.filter(l => !l.for_name), friends = mine.filter(l => l.for_name);
-  const item = l => el("li", {},
-    el("span", {}, (l.for_name ? l.for_name.toUpperCase() + ": " : "") + lineText(l),
+  const item = l => el("li", { class: l.for_name ? "friend" : null },
+    el("span", {}, l.for_name ? el("span", { class: "badge sm" }, "+1") : null, (l.for_name ? l.for_name.toUpperCase() + ": " : "") + lineText(l),
       l.late ? el("span", { class: "tag late" }, "susulan") : null,
       sentLine(l) ? el("span", { class: "tag sent" }, "terkirim") : null),
     mode === "pick" && canChange(l, p) ? el("span", { class: "btns" },
@@ -305,11 +320,11 @@ document.addEventListener("DOMContentLoaded", async () => {
   for (const k of document.querySelectorAll(".key")) k.addEventListener("click", () => setMenu(k.dataset.menu));
   $("sate-minus").addEventListener("click", () => setSate(sate - 1));
   $("sate-plus").addEventListener("click", () => setSate(sate + 1));
-  $("note").addEventListener("input", e => { $("note-count").textContent = [...e.target.value].length + "/10"; });
+  $("note").addEventListener("input", e => { $("note-count").textContent = [...e.target.value].length + "/20"; });
   $("more").addEventListener("click", () => setMode("add"));
   $("friend").addEventListener("click", () => setMode("friend"));
   $("friend-form").addEventListener("click", () => setMode("friend"));
-  $("for").addEventListener("input", () => { $("for-count").textContent = [...$("for").value].length + "/20"; goLabel(); });
+  $("for").addEventListener("input", () => { $("for-count").textContent = [...$("for").value].length + "/20"; goLabel(); friendTitle(); });
   $("cancel").addEventListener("click", () => setMode(""));
   $("change").addEventListener("click", () => {
     if (mode === "pick") return setMode("");

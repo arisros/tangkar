@@ -508,3 +508,40 @@ func TestTestOrderAndActedBy(t *testing.T) {
 		t.Fatalf("people: %+v", people)
 	}
 }
+
+func TestWidenNotes(t *testing.T) {
+	path := filepath.Join(t.TempDir(), "narrow.db")
+	db, err := sql.Open("sqlite", "file:"+path)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if _, err := db.Exec(`CREATE TABLE orders (id TEXT PRIMARY KEY, title TEXT NOT NULL, lock_at INTEGER NOT NULL, late_until INTEGER NOT NULL,
+		status TEXT NOT NULL, created_by TEXT NOT NULL, created_at INTEGER NOT NULL);
+	CREATE TABLE lines (id INTEGER PRIMARY KEY AUTOINCREMENT, order_id TEXT NOT NULL REFERENCES orders(id), email TEXT NOT NULL,
+		menu TEXT NOT NULL CHECK (menu IN ('DAGING','CAMPUR')), sate INTEGER NOT NULL CHECK (sate BETWEEN 0 AND 10),
+		note TEXT NOT NULL DEFAULT '' CHECK (length(note) <= 10), for_name TEXT NOT NULL DEFAULT '',
+		late INTEGER NOT NULL, batch INTEGER, created_at INTEGER NOT NULL);
+	INSERT INTO orders VALUES('x','Soto',9999999999,9999999999,'open','a@bfi.co.id',1);
+	INSERT INTO lines(order_id,email,menu,sate,note,for_name,late,batch,created_at) VALUES('x','a@bfi.co.id','DAGING',2,'no tauge','Okky',0,0,1);
+	INSERT INTO lines(order_id,email,menu,sate,note,late,batch,created_at) VALUES('x','b@bfi.co.id','CAMPUR',0,'',1,NULL,2);`); err != nil {
+		t.Fatal(err)
+	}
+	db.Close()
+	s, err := Open(path)
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer s.Close()
+	ctx := context.Background()
+	lines, err := s.Lines(ctx, "x")
+	if err != nil || len(lines) != 2 || lines[0].Note != "no tauge" || lines[0].For != "Okky" || lines[1].Batch != nil || lines[0].ID != 1 {
+		t.Fatalf("rows after rebuild: %+v %v", lines, err)
+	}
+	if err := s.AddLine(ctx, "x", "c@bfi.co.id", order.Line{Menu: order.Daging, Note: "tanpa daun bawang ya"}); err != nil {
+		t.Fatalf("20-char note rejected after rebuild: %v", err)
+	}
+	lines, _ = s.Lines(ctx, "x")
+	if lines[2].ID != 3 {
+		t.Fatalf("ids restarted after rebuild: %d", lines[2].ID)
+	}
+}

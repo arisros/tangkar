@@ -52,18 +52,7 @@ CREATE TABLE IF NOT EXISTS orders (
 	created_at INTEGER NOT NULL
 );
 CREATE INDEX IF NOT EXISTS orders_status ON orders(status);
-CREATE TABLE IF NOT EXISTS lines (
-	id         INTEGER PRIMARY KEY AUTOINCREMENT,
-	order_id   TEXT NOT NULL REFERENCES orders(id),
-	email      TEXT NOT NULL,
-	menu       TEXT NOT NULL CHECK (menu IN ('DAGING','CAMPUR')),
-	sate       INTEGER NOT NULL CHECK (sate BETWEEN 0 AND 10),
-	note       TEXT NOT NULL DEFAULT '' CHECK (length(note) <= 10),
-	for_name   TEXT NOT NULL DEFAULT '',
-	late       INTEGER NOT NULL,
-	batch      INTEGER,
-	created_at INTEGER NOT NULL
-);
+` + linesDDL + `
 CREATE INDEX IF NOT EXISTS lines_order ON lines(order_id, batch);
 CREATE TABLE IF NOT EXISTS sends (
 	order_id   TEXT NOT NULL REFERENCES orders(id),
@@ -105,6 +94,22 @@ CREATE TABLE IF NOT EXISTS notices (
 );
 `
 
+const linesDDL = `CREATE TABLE IF NOT EXISTS lines (
+	id         INTEGER PRIMARY KEY AUTOINCREMENT,
+	order_id   TEXT NOT NULL REFERENCES orders(id),
+	email      TEXT NOT NULL,
+	menu       TEXT NOT NULL CHECK (menu IN ('DAGING','CAMPUR')),
+	sate       INTEGER NOT NULL CHECK (sate BETWEEN 0 AND 10),
+	note       TEXT NOT NULL DEFAULT '' CHECK (length(note) <= 20),
+	for_name   TEXT NOT NULL DEFAULT '',
+	acted_by   TEXT NOT NULL DEFAULT '',
+	late       INTEGER NOT NULL,
+	batch      INTEGER,
+	created_at INTEGER NOT NULL
+);`
+
+const lineCols = `id,order_id,email,menu,sate,note,for_name,acted_by,late,batch,created_at`
+
 type Store struct {
 	db  *sql.DB
 	Now func() time.Time
@@ -144,7 +149,36 @@ func migrate(db *sql.DB) error {
 			}
 		}
 	}
-	return nil
+	return widenNotes(db)
+}
+
+// widenNotes rebuilds lines from the time notes were capped at 10 characters:
+// SQLite cannot change a CHECK in place, so the rows move to a new table.
+func widenNotes(db *sql.DB) error {
+	var ddl string
+	if err := db.QueryRow(`SELECT sql FROM sqlite_master WHERE type='table' AND name='lines'`).Scan(&ddl); err != nil {
+		return err
+	}
+	if !strings.Contains(ddl, "length(note) <= 10") {
+		return nil
+	}
+	tx, err := db.Begin()
+	if err != nil {
+		return err
+	}
+	defer tx.Rollback()
+	for _, q := range []string{
+		strings.Replace(linesDDL, "CREATE TABLE IF NOT EXISTS lines", "CREATE TABLE lines_new", 1),
+		`INSERT INTO lines_new(` + lineCols + `) SELECT ` + lineCols + ` FROM lines`,
+		`DROP TABLE lines`,
+		`ALTER TABLE lines_new RENAME TO lines`,
+		`CREATE INDEX IF NOT EXISTS lines_order ON lines(order_id, batch)`,
+	} {
+		if _, err := tx.Exec(q); err != nil {
+			return err
+		}
+	}
+	return tx.Commit()
 }
 
 func (s *Store) Close() error { return s.db.Close() }

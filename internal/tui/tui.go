@@ -1008,11 +1008,15 @@ func (m *model) viewOrder(b *strings.Builder, w int) {
 			}
 			b.WriteString(row(sInk.Render(title), sMuted.Render("esc batal"), w) + "\n")
 		case "friend":
-			b.WriteString(row(sAccent.Render(" +1 ")+" "+sInk.Render("UNTUK: "+strings.ToUpper(m.forName)), sMuted.Render("esc batal"), w) + "\n")
+			b.WriteString(sAccent.Width(w).Padding(0, 1).Render(row("LAGI ORDERKAN TEMAN: "+strings.ToUpper(m.forName), "esc batal", w-2)) + "\n")
 		case "edit":
 			for _, l := range m.mine() {
 				if l.ID == m.editID {
-					b.WriteString(row(sInk.Render("GANTI: "+friendPrefix(l)+l.Order().String()), sMuted.Render("esc batal"), w) + "\n")
+					title := row(sInk.Render("GANTI: "+friendPrefix(l)+l.Order().String()), sMuted.Render("esc batal"), w)
+					if l.For != "" {
+						title = sAccent.Width(w).Padding(0, 1).Render(row("GANTI PESANAN TEMAN: "+friendPrefix(l)+l.Order().String(), "esc batal", w-2))
+					}
+					b.WriteString(title + "\n")
 				}
 			}
 		}
@@ -1116,7 +1120,11 @@ func (m *model) nota(w int) string {
 		if l.By != "" {
 			name += " 🎭" + l.By
 		}
-		b.WriteString(row(l.Order().String(), sMuted.Render(name), w) + "\n")
+		bowl := l.Order().String()
+		if l.For != "" {
+			bowl = sAccent.Render("+1") + " " + bowl
+		}
+		b.WriteString(row(bowl, sMuted.Render(name), w) + "\n")
 	}
 	for i, k := range batches {
 		title := "PESANAN " + clock(s.Order.LockAt)
@@ -1186,7 +1194,7 @@ func (m *model) card(w int, p string, mine []store.Line) string {
 	for i, l := range mine {
 		tag := ""
 		if l.For != "" {
-			tag += sMuted.Render(" teman")
+			tag += " " + sAccent.Render(" +1 teman ")
 		}
 		if l.Late {
 			tag += sAmber.Render(" susulan")

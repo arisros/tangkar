@@ -12,7 +12,9 @@ func TestCleanNote(t *testing.T) {
 		in, want string
 		err      bool
 	}{
-		{"tanpa tauge", "", true},
+		{"tanpa tauge", "tanpa tauge", false},
+		{"tanpa daun bawang ya", "tanpa daun bawang ya", false},
+		{"tanpa daun bawang yaa", "", true},
 		{"no tauge", "no tauge", false},
 		{"<b>pedes</b>", "bpedesb", false},
 		{"<script>", "script", false},
@@ -21,7 +23,7 @@ func TestCleanNote(t *testing.T) {
 		{"nasi\n\tdua", "nasi dua", false},
 		{"pedas!!!😀", "pedas", false},
 		{"sambel+", "sambel+", false},
-		{"12345678901", "", true},
+		{"123456789012345678901", "", true},
 		{"", "", false},
 	}
 	for _, c := range cases {

@@ -124,7 +124,7 @@ func TestLineValidation(t *testing.T) {
 		`{"menu":"SATE","sate":1,"note":""}`,
 		`{"menu":"DAGING","sate":11,"note":""}`,
 		`{"menu":"DAGING","sate":-1,"note":""}`,
-		`{"menu":"DAGING","sate":1,"note":"12345678901"}`,
+		`{"menu":"DAGING","sate":1,"note":"123456789012345678901"}`,
 		`{"menu":"DAGING","sate":1,"note":"","qty":5}`,
 		`not json`,
 	} {
@@ -132,14 +132,17 @@ func TestLineValidation(t *testing.T) {
 			t.Errorf("%s accepted: %d %v", bad, r.StatusCode, out)
 		}
 	}
-	if r, _ := e.req("POST", path, "budi@bfi.co.id", `{"menu":"campur","sate":2,"note":"<img src=x onerror=alert(1)>"}`, true); r.StatusCode != http.StatusBadRequest {
-		t.Fatalf("long markup should exceed 10 after cleaning: %d", r.StatusCode)
+	if r, _ := e.req("POST", path, "budi@bfi.co.id", `{"menu":"campur","sate":2,"note":"<svg/onload=alert(1)>"}`, true); r.StatusCode != http.StatusCreated {
+		t.Fatalf("markup should be cleaned to plain letters: %d", r.StatusCode)
 	}
 	if r, out := e.req("POST", path, "budi@bfi.co.id", `{"menu":"campur","sate":2,"note":"<b>pedes"}`, true); r.StatusCode != http.StatusCreated {
 		t.Fatalf("valid line: %d %v", r.StatusCode, out)
 	}
 	_, snap := e.req("GET", "/api/orders/"+id, "budi@bfi.co.id", "", false)
-	l := snap["lines"].([]any)[0].(map[string]any)
+	if n := snap["lines"].([]any)[0].(map[string]any)["note"]; n != "svgonloadalert1" {
+		t.Fatalf("markup note stored as %q", n)
+	}
+	l := snap["lines"].([]any)[1].(map[string]any)
 	if l["menu"] != "CAMPUR" || l["note"] != "bpedes" || l["name"] != "budi" {
 		t.Fatalf("stored line: %v", l)
 	}

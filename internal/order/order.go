@@ -14,7 +14,7 @@ const (
 	Daging = "DAGING"
 	Campur = "CAMPUR"
 
-	MaxNote  = 10
+	MaxNote  = 20
 	MaxSate  = 10
 	MaxLines = 10
 
