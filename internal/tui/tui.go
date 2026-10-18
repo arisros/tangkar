@@ -739,15 +739,16 @@ var (
 	cAmber = lipgloss.Color("214")
 	cBoard = lipgloss.Color("235")
 
-	sInk   = lipgloss.NewStyle().Bold(true)
-	sMuted = lipgloss.NewStyle().Foreground(cMuted)
-	sRed   = lipgloss.NewStyle().Foreground(cRed).Bold(true)
-	sGreen = lipgloss.NewStyle().Foreground(cGreen)
-	sAmber = lipgloss.NewStyle().Foreground(cAmber)
-	sKey   = lipgloss.NewStyle().Foreground(cInk).Background(lipgloss.Color("238")).Padding(0, 1)
-	sSel   = lipgloss.NewStyle().Reverse(true)
-	sFrame = lipgloss.NewStyle().Border(lipgloss.RoundedBorder()).BorderForeground(lipgloss.Color("180")).Padding(0, 2)
-	sBoard = lipgloss.NewStyle().Background(cBoard).Foreground(lipgloss.Color("229")).Padding(0, 1)
+	sInk    = lipgloss.NewStyle().Bold(true)
+	sMuted  = lipgloss.NewStyle().Foreground(cMuted)
+	sRed    = lipgloss.NewStyle().Foreground(cRed).Bold(true)
+	sGreen  = lipgloss.NewStyle().Foreground(cGreen)
+	sAmber  = lipgloss.NewStyle().Foreground(cAmber)
+	sKey    = lipgloss.NewStyle().Foreground(cInk).Background(lipgloss.Color("238")).Padding(0, 1)
+	sSel    = lipgloss.NewStyle().Reverse(true)
+	sAccent = lipgloss.NewStyle().Background(lipgloss.Color("221")).Foreground(lipgloss.Color("16")).Bold(true)
+	sFrame  = lipgloss.NewStyle().Border(lipgloss.RoundedBorder()).BorderForeground(lipgloss.Color("180")).Padding(0, 2)
+	sBoard  = lipgloss.NewStyle().Background(cBoard).Foreground(lipgloss.Color("229")).Padding(0, 1)
 )
 
 // inner is the content width of the centered box.
@@ -785,6 +786,9 @@ func keys(w int, pairs ...string) string {
 	cur := ""
 	for i := 0; i+1 < len(pairs); i += 2 {
 		item := sKey.Render(pairs[i]) + " " + sMuted.Render(pairs[i+1])
+		if pairs[i+1] == "orderkan teman" {
+			item = sAccent.Render(" +1 "+pairs[i]+" ") + " " + lipgloss.NewStyle().Bold(true).Render(pairs[i+1])
+		}
 		if cur != "" && lipgloss.Width(cur)+2+lipgloss.Width(item) > w {
 			lines = append(lines, cur)
 			cur = ""
@@ -1004,7 +1008,7 @@ func (m *model) viewOrder(b *strings.Builder, w int) {
 			}
 			b.WriteString(row(sInk.Render(title), sMuted.Render("esc batal"), w) + "\n")
 		case "friend":
-			b.WriteString(row(sInk.Render("UNTUK: "+strings.ToUpper(m.forName)), sMuted.Render("esc batal"), w) + "\n")
+			b.WriteString(row(sAccent.Render(" +1 ")+" "+sInk.Render("UNTUK: "+strings.ToUpper(m.forName)), sMuted.Render("esc batal"), w) + "\n")
 		case "edit":
 			for _, l := range m.mine() {
 				if l.ID == m.editID {
