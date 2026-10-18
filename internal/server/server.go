@@ -91,6 +91,7 @@ func (s *Server) Handler() http.Handler {
 	m.HandleFunc("GET /api/orders/{id}/events", s.api(s.handleOrderEvents))
 	m.HandleFunc("POST /api/orders/{id}/lines", s.api(s.handleAddLine))
 	m.HandleFunc("DELETE /api/orders/{id}/lines/{line}", s.api(s.handleDeleteLine))
+	m.HandleFunc("PUT /api/orders/{id}/lines/{line}", s.api(s.handleUpdateLine))
 	m.HandleFunc("POST /api/orders/{id}/lock", s.admin(s.handleLock))
 	m.HandleFunc("POST /api/orders/{id}/late", s.admin(s.handleLate))
 	m.HandleFunc("POST /api/orders/{id}/cancel", s.admin(s.handleCancel))
@@ -439,14 +440,15 @@ func (s *Server) handleCreate(w http.ResponseWriter, r *http.Request, u User) {
 	writeJSON(w, http.StatusCreated, map[string]any{"order": o, "url": s.cfg.BaseURL + "/o/" + o.ID})
 }
 
-func (s *Server) handleAddLine(w http.ResponseWriter, r *http.Request, u User) {
+// readLine decodes and validates one bowl from a request body.
+func readLine(w http.ResponseWriter, r *http.Request) (order.Line, bool) {
 	var in struct {
 		Menu string `json:"menu"`
 		Sate int    `json:"sate"`
 		Note string `json:"note"`
 	}
 	if !readJSON(w, r, &in) {
-		return
+		return order.Line{}, false
 	}
 	menu, err := order.ValidMenu(in.Menu)
 	if err == nil {
@@ -458,15 +460,42 @@ func (s *Server) handleAddLine(w http.ResponseWriter, r *http.Request, u User) {
 	}
 	if err != nil {
 		writeErr(w, http.StatusBadRequest, err.Error())
+		return order.Line{}, false
+	}
+	return order.Line{Menu: menu, Sate: in.Sate, Note: note}, true
+}
+
+func (s *Server) handleAddLine(w http.ResponseWriter, r *http.Request, u User) {
+	l, ok := readLine(w, r)
+	if !ok {
 		return
 	}
 	id := r.PathValue("id")
-	if err := s.store.AddLine(r.Context(), id, u.Email, order.Line{Menu: menu, Sate: in.Sate, Note: note}); err != nil {
+	if err := s.store.AddLine(r.Context(), id, u.Email, l); err != nil {
 		s.fail(w, err)
 		return
 	}
 	s.changed(id)
 	writeJSON(w, http.StatusCreated, map[string]bool{"ok": true})
+}
+
+func (s *Server) handleUpdateLine(w http.ResponseWriter, r *http.Request, u User) {
+	lineID, err := strconv.ParseInt(r.PathValue("line"), 10, 64)
+	if err != nil {
+		writeErr(w, http.StatusBadRequest, "baris tidak valid")
+		return
+	}
+	l, ok := readLine(w, r)
+	if !ok {
+		return
+	}
+	id := r.PathValue("id")
+	if err := s.store.UpdateLine(r.Context(), id, lineID, u.Email, l); err != nil {
+		s.fail(w, err)
+		return
+	}
+	s.changed(id)
+	writeJSON(w, http.StatusOK, map[string]bool{"ok": true})
 }
 
 func (s *Server) handleDeleteLine(w http.ResponseWriter, r *http.Request, u User) {

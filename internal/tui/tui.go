@@ -85,6 +85,7 @@ const (
 	confirmLock
 	confirmCancel
 	confirmLateOff
+	confirmDelete
 )
 
 type model struct {
@@ -107,6 +108,8 @@ type model struct {
 	note    textinput.Model
 	noting  bool
 	pick    int
+	mode    string
+	editID  int64
 
 	prompt prompt
 	input  textinput.Model
@@ -225,6 +228,13 @@ func (m *model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 			m.liveL = msg.ok
 		} else {
 			m.liveO = msg.ok
+		}
+	case savedMsg:
+		m.flash(msg.text, msg.err)
+		if msg.err == nil {
+			m.mode = ""
+			m.sate = 0
+			m.note.SetValue("")
 		}
 	case createdMsg:
 		m.openOrder(msg.id)
@@ -392,38 +402,73 @@ func (m *model) orderKey(k tea.KeyMsg) (tea.Model, tea.Cmd) {
 	o := m.snap.Order
 	p := phaseOf(o, m.now())
 	base := "/api/orders/" + o.ID
-	switch k.String() {
-	case "esc", "backspace":
-		m.closeOrder()
-		m.view, m.status = viewList, ""
-	case "q":
-		return m, tea.Quit
-	case "d", "1":
-		m.menu = order.Daging
-	case "a", "2":
-		m.menu = order.Campur
-	case "tab", "left", "right", "m":
-		if m.menu == order.Daging {
-			m.menu = order.Campur
-		} else {
+	if m.formActive(p) {
+		switch k.String() {
+		case "esc":
+			if m.mode != "" {
+				m.mode, m.status = "", ""
+				return m, nil
+			}
+			m.closeOrder()
+			m.view, m.status = viewList, ""
+			return m, nil
+		case "d", "1":
 			m.menu = order.Daging
+		case "a", "2":
+			m.menu = order.Campur
+		case "tab", "left", "right", "m":
+			if m.menu == order.Daging {
+				m.menu = order.Campur
+			} else {
+				m.menu = order.Daging
+			}
+		case "+", "=":
+			m.sate = min(order.MaxSate, m.sate+1)
+		case "-", "_":
+			m.sate = max(0, m.sate-1)
+		case "n", "/":
+			m.noting = true
+			return m, m.note.Focus()
+		case "enter", "p":
+			return m, m.submit()
 		}
-	case "+", "=":
-		m.sate = min(order.MaxSate, m.sate+1)
-	case "-", "_":
-		m.sate = max(0, m.sate-1)
-	case "n", "/":
-		m.noting = true
-		return m, m.note.Focus()
-	case "enter", "p":
-		return m, m.submit()
-	case "up", "k":
-		m.pick = max(0, m.pick-1)
-	case "down", "j":
-		m.pick = min(len(m.mine())-1, m.pick+1)
-	case "x", "delete":
-		if mine := m.mine(); m.pick < len(mine) {
-			return m, m.act("dihapus", http.MethodDelete, fmt.Sprintf("%s/lines/%d", base, mine[m.pick].ID), nil)
+	} else {
+		mine := m.mine()
+		switch k.String() {
+		case "esc", "backspace":
+			m.closeOrder()
+			m.view, m.status = viewList, ""
+		case "up", "k":
+			m.pick = max(0, m.pick-1)
+		case "down", "j":
+			m.pick = min(len(mine)-1, m.pick+1)
+		case "o", "+":
+			if p == "open" || p == "late" {
+				m.startForm("add", store.Line{Menu: order.Daging})
+			}
+		case "g", "e":
+			if m.pick < len(mine) {
+				if !canChange(mine[m.pick], p) {
+					m.flash("", errors.New("mangkok ini sudah dikirim ke Mamang, tidak bisa diganti"))
+				} else {
+					m.startForm("edit", mine[m.pick])
+				}
+			}
+		case "x", "delete":
+			if m.pick < len(mine) {
+				if !canChange(mine[m.pick], p) {
+					m.flash("", errors.New("mangkok ini sudah dikirim ke Mamang, tidak bisa dihapus"))
+				} else {
+					m.editID = mine[m.pick].ID
+					m.prompt = confirmDelete
+				}
+			}
+		}
+	}
+	switch k.String() {
+	case "q":
+		if !m.noting {
+			return m, tea.Quit
 		}
 	case "c":
 		return m, copyCmd(m.c.base + "/o/" + o.ID)
@@ -471,21 +516,60 @@ func (m *model) ask(p prompt, val string) {
 	m.input.CursorEnd()
 }
 
+func canChange(l store.Line, p string) bool {
+	if !l.Late {
+		return p == "open"
+	}
+	return l.Batch == nil && p != "cancelled"
+}
+
+// formActive reports whether the order form shows: before someone's first
+// bowl, or when they chose to add or change one. Otherwise they see their card.
+func (m *model) formActive(p string) bool {
+	if p != "open" && p != "late" {
+		return false
+	}
+	if m.mode == "edit" {
+		for _, l := range m.mine() {
+			if l.ID == m.editID && canChange(l, p) {
+				return true
+			}
+		}
+		m.mode = ""
+	}
+	return m.mode == "add" || len(m.mine()) == 0
+}
+
+func (m *model) startForm(mode string, l store.Line) {
+	m.mode, m.editID, m.status = mode, l.ID, ""
+	m.menu, m.sate = l.Menu, l.Sate
+	m.note.SetValue(l.Note)
+}
+
+type savedMsg struct {
+	text string
+	err  error
+}
+
 func (m *model) submit() tea.Cmd {
 	if m.snap == nil {
 		return nil
 	}
+	l := order.Line{Menu: m.menu, Sate: m.sate, Note: order.CleanText(m.note.Value())}
 	body := map[string]any{"menu": m.menu, "sate": m.sate, "note": m.note.Value()}
-	path := "/api/orders/" + m.snap.Order.ID + "/lines"
-	m.note.SetValue("")
-	m.sate = 0
-	return m.act("dipesan: "+order.Line{Menu: body["menu"].(string), Sate: body["sate"].(int), Note: order.CleanText(body["note"].(string))}.String(), http.MethodPost, path, body)
+	method, path, done := http.MethodPost, "/api/orders/"+m.snap.Order.ID+"/lines", "✓ masuk: "+l.String()
+	if m.mode == "edit" {
+		method, path, done = http.MethodPut, fmt.Sprintf("%s/%d", path, m.editID), "✓ diganti: "+l.String()
+	}
+	return func() tea.Msg {
+		return savedMsg{text: done, err: m.c.call(method, path, body, nil)}
+	}
 }
 
 func (m *model) promptKey(k tea.KeyMsg) (tea.Model, tea.Cmd) {
 	base := "/api/orders/" + m.orderID
 	switch m.prompt {
-	case confirmLock, confirmCancel, confirmLateOff:
+	case confirmLock, confirmCancel, confirmLateOff, confirmDelete:
 		p := m.prompt
 		m.prompt = promptNone
 		if k.String() != "y" && k.String() != "Y" {
@@ -497,6 +581,8 @@ func (m *model) promptKey(k tea.KeyMsg) (tea.Model, tea.Cmd) {
 			return m, m.act("dikunci, dikirim ke grup", http.MethodPost, base+"/lock", nil)
 		case confirmCancel:
 			return m, m.act("pesanan dibatalkan", http.MethodPost, base+"/cancel", nil)
+		case confirmDelete:
+			return m, m.act("mangkok dihapus", http.MethodDelete, fmt.Sprintf("%s/lines/%d", base, m.editID), nil)
 		default:
 			return m, m.act("late join ditutup", http.MethodPost, base+"/late", map[string]int{"minutes": 0})
 		}
@@ -762,29 +848,29 @@ func (m *model) viewOrder(b *strings.Builder, w int) {
 	b.WriteString(m.sendBar(w))
 	b.WriteString("\n")
 
-	if p == "open" || p == "late" {
+	if m.formActive(p) {
+		switch m.mode {
+		case "add":
+			title := "TAMBAH MANGKOK LAGI"
+			if p == "late" {
+				title = "ORDER SUSULAN"
+			}
+			b.WriteString(row(sInk.Render(title), sMuted.Render("esc batal"), w) + "\n")
+		case "edit":
+			for _, l := range m.mine() {
+				if l.ID == m.editID {
+					b.WriteString(row(sInk.Render("GANTI: "+l.Order().String()), sMuted.Render("esc batal"), w) + "\n")
+				}
+			}
+		}
 		b.WriteString(m.menuKeys(w) + "\n")
 		note := m.note.View()
 		if !m.noting && m.note.Value() == "" {
 			note = sMuted.Render("n untuk isi")
 		}
 		b.WriteString(fmt.Sprintf("SATE  [-] %s [+]     CATATAN  %s", sInk.Render(fmt.Sprintf("%2d", m.sate)), note) + "\n\n")
-	}
-
-	if mine := m.mine(); len(mine) > 0 {
-		b.WriteString(sMuted.Render("PESANAN KAKAK") + "\n")
-		for i, l := range mine {
-			tag := ""
-			if l.Late {
-				tag = sAmber.Render(" susulan")
-			}
-			item := "  " + l.Order().String() + "  "
-			if i == m.pick {
-				item = sSel.Render(item)
-			}
-			b.WriteString(item + tag + "\n")
-		}
-		b.WriteString("\n")
+	} else if mine := m.mine(); len(mine) > 0 {
+		b.WriteString(m.card(w, p, mine) + "\n\n")
 	}
 
 	nota := lipgloss.NewStyle().Border(lipgloss.NormalBorder()).BorderForeground(lipgloss.Color("240")).Padding(0, 1).Width(w - 2)
@@ -804,6 +890,9 @@ func (m *model) viewOrder(b *strings.Builder, w int) {
 	case confirmLateOff:
 		b.WriteString(sRed.Render("Tutup late join sekarang? (y/n)") + "\n")
 		return
+	case confirmDelete:
+		b.WriteString(sRed.Render("Hapus mangkok ini? (y/n)") + "\n")
+		return
 	case promptLockAt:
 		b.WriteString("Jam tutup baru (HH:MM)\n" + m.input.View() + "\n")
 		return
@@ -812,10 +901,23 @@ func (m *model) viewOrder(b *strings.Builder, w int) {
 		return
 	}
 	var pairs []string
-	if p == "open" || p == "late" {
-		pairs = append(pairs, "d/a", "daging/campur", "+/-", "sate", "n", "catatan", "enter", "pesan")
+	switch {
+	case m.formActive(p) && m.mode == "edit":
+		pairs = []string{"d/a", "daging/campur", "+/-", "sate", "n", "catatan", "enter", "simpan", "esc", "batal"}
+	case m.formActive(p) && m.mode == "add":
+		pairs = []string{"d/a", "daging/campur", "+/-", "sate", "n", "catatan", "enter", "pesan lagi", "esc", "batal"}
+	case m.formActive(p):
+		pairs = []string{"d/a", "daging/campur", "+/-", "sate", "n", "catatan", "enter", "pesan", "esc", "kembali"}
+	default:
+		if p == "open" || p == "late" {
+			pairs = append(pairs, "o", "order lagi")
+		}
+		if len(m.mine()) > 0 {
+			pairs = append(pairs, "↑↓", "pilih", "g", "ganti", "x", "hapus")
+		}
+		pairs = append(pairs, "esc", "kembali")
 	}
-	pairs = append(pairs, "↑↓", "pilih", "x", "hapus", "c", "salin link", "esc", "kembali")
+	pairs = append(pairs, "c", "salin link")
 	b.WriteString(keys(w, pairs...) + "\n")
 	if m.me.Admin {
 		b.WriteString(keys(w, "L", "kunci", "T", "jam tutup", "J", "late join", "X", "tutup late", "C", "batal", "R", "kirim ulang") + "\n")
@@ -888,4 +990,55 @@ func (m *model) nota(w int) string {
 	b.WriteString(row(fmt.Sprintf("DAGING %d  CAMPUR %d", t.Daging, t.Campur), fmt.Sprintf("SATE %d", t.Sate), w) + "\n")
 	b.WriteString(row(sInk.Render("TOTAL"), sInk.Render(fmt.Sprintf("%d porsi", t.Bowls)), w))
 	return b.String()
+}
+
+// card is what someone sees after ordering: their bowls and where they are,
+// instead of an empty form that looks like nothing happened.
+func (m *model) card(w int, p string, mine []store.Line) string {
+	sent := func(l store.Line) bool {
+		if l.Batch == nil {
+			return false
+		}
+		for _, x := range m.snap.Sends {
+			if x.Batch == *l.Batch && x.Status == order.SendSent {
+				return true
+			}
+		}
+		return false
+	}
+	all := true
+	waiting := false
+	for _, l := range mine {
+		all = all && sent(l)
+		waiting = waiting || (l.Late && l.Batch == nil)
+	}
+	var b strings.Builder
+	title, color := "✓ PESANAN KAKAK SUDAH MASUK 😋", cGreen
+	if all {
+		title, color = "✓ SUDAH SAMPAI KE MAMANG 😋", cInk
+	}
+	b.WriteString(lipgloss.NewStyle().Bold(true).Foreground(color).Render(title) + "\n")
+	for i, l := range mine {
+		tag := ""
+		if l.Late {
+			tag += sAmber.Render(" susulan")
+		}
+		if sent(l) {
+			tag += sGreen.Render(" terkirim")
+		}
+		item := " " + l.Order().String() + " "
+		mark := "  "
+		if i == m.pick {
+			item, mark = sSel.Render(item), "▸ "
+		}
+		b.WriteString(mark + item + tag + "\n")
+	}
+	switch {
+	case p == "open":
+		b.WriteString(sMuted.Render("Dikirim ke Mamang jam " + clock(m.snap.Order.LockAt) + ", masih bisa diganti sampai jam itu."))
+	case waiting && m.snap.CutAt > 0:
+		b.WriteString(sAmber.Render("Susulan Kakak dikirim ke Mamang ±" + clock(time.UnixMilli(m.snap.CutAt))))
+	}
+	return lipgloss.NewStyle().Border(lipgloss.RoundedBorder()).BorderForeground(color).Padding(0, 1).Width(w - 2).
+		Render(strings.TrimRight(b.String(), "\n"))
 }

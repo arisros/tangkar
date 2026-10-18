@@ -374,3 +374,50 @@ func TestPhoneCode(t *testing.T) {
 		t.Fatal("phone not saved")
 	}
 }
+
+func TestUpdateLine(t *testing.T) {
+	ctx := context.Background()
+	s, c := newStore(t)
+	o := mustOrder(t, s, c)
+	s.AddLine(ctx, o.ID, "a@bfi.co.id", order.Line{Menu: order.Daging, Sate: 2})
+	lines, _ := s.Lines(ctx, o.ID)
+	id := lines[0].ID
+	if err := s.UpdateLine(ctx, o.ID, id, "b@bfi.co.id", order.Line{Menu: order.Campur}); !errors.Is(err, ErrNotFound) {
+		t.Fatalf("someone else changed a bowl: %v", err)
+	}
+	if err := s.UpdateLine(ctx, o.ID, id, "a@bfi.co.id", order.Line{Menu: order.Campur, Sate: 1, Note: "pedes"}); err != nil {
+		t.Fatal(err)
+	}
+	lines, _ = s.Lines(ctx, o.ID)
+	if l := lines[0]; l.Menu != order.Campur || l.Sate != 1 || l.Note != "pedes" || len(lines) != 1 {
+		t.Fatalf("not changed in place: %+v", lines)
+	}
+	c.at("11:30")
+	if err := s.UpdateLine(ctx, o.ID, id, "a@bfi.co.id", order.Line{Menu: order.Daging}); !errors.Is(err, ErrSent) {
+		t.Fatalf("changed after the lock: %v", err)
+	}
+}
+
+func TestUpdateLateLineRestartsDebounce(t *testing.T) {
+	ctx := context.Background()
+	s, c := newStore(t)
+	o := lockedAndSent(t, s, c)
+	c.at("11:40")
+	s.AddLine(ctx, o.ID, "b@bfi.co.id", order.Line{Menu: order.Campur})
+	lines, _ := s.Lines(ctx, o.ID)
+	late := lines[len(lines)-1]
+	c.t = c.t.Add(90 * time.Second)
+	if err := s.UpdateLine(ctx, o.ID, late.ID, late.Email, order.Line{Menu: order.Daging, Sate: 3}); err != nil {
+		t.Fatal(err)
+	}
+	c.t = c.t.Add(90 * time.Second)
+	tick(t, s)
+	if len(pending(t, s)) != 0 {
+		t.Fatal("cut 90s after a change; the change should restart the quiet period")
+	}
+	c.t = c.t.Add(31 * time.Second)
+	tick(t, s)
+	if p := pending(t, s); len(p) != 1 || !strings.Contains(p[0].Message, "B: DAGING 3 SATE") {
+		t.Fatalf("changed bowl not sent: %+v", p)
+	}
+}

@@ -27,7 +27,22 @@
   <p class="note-bar" id="late-bar" hidden></p>
   <p class="send-bar" id="send-bar" role="status" hidden></p>
 
+  <section class="done" id="done" hidden>
+    <h2 id="done-h">✓ Pesanan Kakak sudah masuk 😋</h2>
+    <ul id="done-list"></ul>
+    <p class="done-when" id="done-when"></p>
+    <p class="pick-hint" id="pick-hint" hidden>Pilih mangkok yang mau diganti atau dihapus</p>
+    <div class="actions" id="done-actions">
+      <button class="tool big" type="button" id="more">+ Order lagi</button>
+      <button class="tool big" type="button" id="change">✎ Ganti order</button>
+    </div>
+  </section>
+
   <section class="machine" id="machine" hidden>
+    <div class="form-h" id="form-h" hidden>
+      <span id="form-title"></span>
+      <button class="link" type="button" id="cancel">Batal</button>
+    </div>
     <div class="menu" role="group" aria-label="Menu">
       <button class="key" type="button" data-menu="DAGING" aria-pressed="true">Daging<small>soto daging</small></button>
       <button class="key" type="button" data-menu="CAMPUR" aria-pressed="false">Campur<small>daging + jeroan</small></button>
@@ -50,11 +65,6 @@
     <button class="go" type="button" id="go">Pesan</button>
     <p class="err" id="err" role="alert"></p>
     <div class="stamp" id="stamp" hidden><span>TUTUP</span></div>
-  </section>
-
-  <section class="mine" id="mine" hidden>
-    <h2>Pesanan Kakak</h2>
-    <ul id="mine-list"></ul>
   </section>
 
   <section class="nota" id="nota">

@@ -184,3 +184,18 @@ button { cursor: pointer; }
 .phone p { margin: 0; }
 .link { border: 0; background: none; padding: 6px 0 0; color: var(--muted); text-decoration: underline; font-size: 13px; }
 textarea.import { width: 100%; min-height: 110px; border: 2px solid var(--ink); border-radius: 4px; padding: 8px; font: 14px var(--mono); background: #fff; margin-top: 4px; }
+
+.done { margin-top: 14px; padding: 14px; border: 2px solid var(--green); border-radius: 6px; background: #eef6ea; }
+.done.sent { border-color: var(--ink); background: var(--sheet); }
+.done h2 { margin: 0 0 8px; font: 700 18px var(--cond); letter-spacing: .04em; text-transform: uppercase; color: var(--green); }
+.done.sent h2 { color: var(--ink); }
+.done ul { list-style: none; margin: 0; padding: 0; }
+.done li { display: flex; align-items: center; justify-content: space-between; gap: 8px; padding: 6px 0; border-bottom: 1px dashed var(--rule); font: 17px var(--mono); }
+.done li .btns { display: flex; gap: 6px; }
+.done-when { margin: 8px 0 0; font-size: 14px; color: var(--muted); }
+.pick-hint { margin: 8px 0 0; font: 700 13px var(--cond); letter-spacing: .06em; text-transform: uppercase; color: var(--amber); }
+.actions { display: grid; grid-template-columns: 1fr 1fr; gap: 10px; margin-top: 12px; }
+.actions.one { grid-template-columns: 1fr; }
+.tool.big { padding: 14px 8px; font-size: 16px; background: var(--sheet); }
+.form-h { display: flex; justify-content: space-between; align-items: baseline; margin-bottom: 10px; font: 700 16px var(--cond); letter-spacing: .06em; text-transform: uppercase; }
+.form-h .link { padding: 0; font-size: 15px; }

@@ -387,6 +387,28 @@ func (s *Store) AddLine(ctx context.Context, orderID, email string, l order.Line
 
 // DeleteLine lets an owner take a bowl back until it has gone to the seller.
 func (s *Store) DeleteLine(ctx context.Context, orderID string, lineID int64, email string) error {
+	return s.changeLine(ctx, orderID, lineID, email, func(tx *sql.Tx, late bool) error {
+		_, err := tx.ExecContext(ctx, `DELETE FROM lines WHERE id=?`, lineID)
+		return err
+	})
+}
+
+// UpdateLine lets an owner change their mind about a bowl until it has gone to
+// the seller. A changed late bowl counts as fresh activity for the debounce.
+func (s *Store) UpdateLine(ctx context.Context, orderID string, lineID int64, email string, l order.Line) error {
+	return s.changeLine(ctx, orderID, lineID, email, func(tx *sql.Tx, late bool) error {
+		at := "created_at"
+		if late {
+			at = fmt.Sprint(s.Now().Unix())
+		}
+		_, err := tx.ExecContext(ctx, `UPDATE lines SET menu=?, sate=?, note=?, created_at=`+at+` WHERE id=?`, l.Menu, l.Sate, l.Note, lineID)
+		return err
+	})
+}
+
+// changeLine runs fn on someone's own bowl inside the same transaction that
+// checks it has not been locked or cut for the seller yet.
+func (s *Store) changeLine(ctx context.Context, orderID string, lineID int64, email string, fn func(*sql.Tx, bool) error) error {
 	tx, err := s.db.BeginTx(ctx, nil)
 	if err != nil {
 		return err
@@ -411,7 +433,7 @@ func (s *Store) DeleteLine(ctx context.Context, orderID string, lineID int64, em
 	if !ok {
 		return ErrSent
 	}
-	if _, err := tx.ExecContext(ctx, `DELETE FROM lines WHERE id=?`, lineID); err != nil {
+	if err := fn(tx, late); err != nil {
 		return err
 	}
 	return tx.Commit()

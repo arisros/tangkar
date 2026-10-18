@@ -2,6 +2,9 @@
 
 const id = location.pathname.split("/").pop();
 let me = null, snap = null, offset = 0, menu = "DAGING", sate = 0, busy = false;
+// mode is what the person is doing: "" just looking (the card), "add" another
+// bowl, "pick" a bowl to change, "edit" the bowl editID.
+let mode = "", editID = 0;
 
 const now = () => Date.now() + offset;
 
@@ -21,23 +24,41 @@ function setSate(n) {
 
 function goLabel() {
   const p = snap ? phase(snap.order, now()) : "open";
-  let s = (p === "late" ? "Pesan susulan: " : "Pesan ") + menu;
+  let s = mode === "edit" ? "Simpan: " : mode === "add" ? (p === "late" ? "Order susulan: " : "Pesan lagi: ") : (p === "late" ? "Pesan susulan: " : "Pesan ");
+  s += menu;
   if (sate) s += " + " + sate + " sate";
   $("go").textContent = s;
+}
+
+function setNote(v) {
+  $("note").value = v;
+  $("note-count").textContent = [...v].length + "/10";
+}
+
+function setMode(m, line) {
+  mode = m;
+  editID = line ? line.id : 0;
+  $("err").textContent = "";
+  if (m === "edit") { setMenu(line.menu); setSate(line.sate); setNote(line.note); }
+  if (m === "add") { setMenu("DAGING"); setSate(0); setNote(""); }
+  if (snap) renderMine(phase(snap.order, now()));
 }
 
 async function order() {
   if (busy) return;
   busy = true; $("go").disabled = true; $("err").textContent = "";
   try {
-    await api("POST", "/api/orders/" + id + "/lines", { menu, sate, note: $("note").value });
-    $("note").value = ""; $("note-count").textContent = "0/10"; setSate(0);
+    const body = { menu, sate, note: $("note").value };
+    if (mode === "edit") await api("PUT", "/api/orders/" + id + "/lines/" + editID, body);
+    else await api("POST", "/api/orders/" + id + "/lines", body);
+    setNote(""); setSate(0); setMode("");
   } catch (e) { $("err").textContent = e.message; }
   finally { busy = false; $("go").disabled = false; }
 }
 
 async function del(lineID) {
-  try { await api("DELETE", "/api/orders/" + id + "/lines/" + lineID); }
+  if (!confirm("Hapus mangkok ini?")) return;
+  try { await api("DELETE", "/api/orders/" + id + "/lines/" + lineID); setMode(""); }
   catch (e) { $("err").textContent = e.message; }
 }
 
@@ -82,19 +103,54 @@ function renderNota() {
   body.replaceChildren(...parts);
 }
 
-function canDelete(l, p) {
+function canChange(l, p) {
   if (!l.late) return p === "open";
   return l.batch == null && p !== "cancelled";
 }
 
+function sentLine(l) {
+  return l.batch != null && (snap.sends.find(s => s.batch === l.batch) || {}).status === "sent";
+}
+
+// renderMine decides between the "sudah masuk" card and the order form, so
+// nobody mistakes an empty form for an order that did not go through.
 function renderMine(p) {
   const mine = snap.lines.filter(l => l.email === me.email);
-  $("mine").hidden = mine.length === 0;
-  $("mine-list").replaceChildren(...mine.map(l => el("li", {},
+  const open = p === "open" || p === "late";
+  const changeable = mine.filter(l => canChange(l, p));
+  if (mode === "edit" && !changeable.some(l => l.id === editID)) mode = "";
+  if (mode === "pick" && !changeable.length) mode = "";
+  if (mode === "add" && !open) mode = "";
+
+  const card = mine.length > 0 && (mode === "" || mode === "pick");
+  $("done").hidden = !card;
+  $("machine").hidden = card || (!open && mine.length > 0);
+  $("form-h").hidden = !(mode === "add" || mode === "edit");
+  if (mode === "add") $("form-title").textContent = p === "late" ? "Order susulan" : "Tambah mangkok lagi";
+  if (mode === "edit") $("form-title").textContent = "Ganti: " + lineText(mine.find(l => l.id === editID));
+
+  const allSent = mine.length > 0 && mine.every(sentLine);
+  $("done").className = "done" + (allSent ? " sent" : "");
+  $("done-h").textContent = allSent ? "✓ Sudah sampai ke Mamang 😋" : "✓ Pesanan Kakak sudah masuk 😋";
+  $("done-list").replaceChildren(...mine.map(l => el("li", {},
     el("span", {}, lineText(l),
       l.late ? el("span", { class: "tag late" }, "susulan") : null,
-      l.batch != null && (snap.sends.find(s => s.batch === l.batch) || {}).status === "sent" ? el("span", { class: "tag sent" }, "terkirim") : null),
-    canDelete(l, p) ? el("button", { class: "del", type: "button", onclick: () => del(l.id) }, "Hapus") : null)));
+      sentLine(l) ? el("span", { class: "tag sent" }, "terkirim") : null),
+    mode === "pick" && canChange(l, p) ? el("span", { class: "btns" },
+      el("button", { class: "del", type: "button", onclick: () => setMode("edit", l) }, "Ganti"),
+      el("button", { class: "del", type: "button", onclick: () => del(l.id) }, "Hapus")) : null)));
+  const waiting = mine.some(l => l.late && l.batch == null);
+  $("done-when").textContent = p === "open" ? "Dikirim ke Mamang jam " + hhmm(snap.order.lock_at) + ". Masih bisa diganti sampai jam itu."
+    : waiting && snap.cut_at ? "Susulan Kakak dikirim ke Mamang ±" + hhmm(snap.cut_at) + "."
+    : "";
+  $("pick-hint").hidden = mode !== "pick";
+  $("more").hidden = !open || mode === "pick";
+  $("more").textContent = p === "late" ? "+ Order susulan" : "+ Order lagi";
+  $("change").hidden = !changeable.length;
+  $("change").textContent = mode === "pick" ? "Selesai" : "✎ Ganti order";
+  $("done-actions").classList.toggle("one", $("more").hidden !== $("change").hidden);
+  $("done-actions").hidden = $("more").hidden && $("change").hidden;
+  goLabel();
 }
 
 function renderBoard() {
@@ -123,7 +179,6 @@ function renderBoard() {
   const bar = $("late-bar");
   bar.hidden = p !== "late";
   if (p === "late") bar.textContent = "Kakak-kakak, pesanan utama sudah jalan ke Mamang. Pesanan Kakak sekarang masuk TAMBAHAN, dikirim otomatis 2 menit setelah susulan terakhir (paling lama 4 menit).";
-  $("machine").hidden = false;
   $("stamp").hidden = p === "open" || p === "late";
   for (const x of $("machine").querySelectorAll("button, input")) x.disabled = !(p === "open" || p === "late") || (x.id === "go" && busy);
   if (p === "open" || p === "late") setSate(sate);
@@ -227,6 +282,15 @@ document.addEventListener("DOMContentLoaded", async () => {
   $("sate-minus").addEventListener("click", () => setSate(sate - 1));
   $("sate-plus").addEventListener("click", () => setSate(sate + 1));
   $("note").addEventListener("input", e => { $("note-count").textContent = [...e.target.value].length + "/10"; });
+  $("more").addEventListener("click", () => setMode("add"));
+  $("cancel").addEventListener("click", () => setMode(""));
+  $("change").addEventListener("click", () => {
+    if (mode === "pick") return setMode("");
+    const p = phase(snap.order, now());
+    const changeable = snap.lines.filter(l => l.email === me.email && canChange(l, p));
+    if (changeable.length === 1) setMode("edit", changeable[0]);
+    else setMode("pick");
+  });
   $("note").addEventListener("keydown", e => { if (e.key === "Enter") order(); });
   $("go").addEventListener("click", order);
   $("a-copy").addEventListener("click", async () => { $("a-copy").textContent = (await copy(location.origin + "/o/" + id)) ? "Tersalin ✓" : "Gagal salin"; });
