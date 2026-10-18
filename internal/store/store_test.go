@@ -3,6 +3,7 @@ package store
 import (
 	"context"
 	"errors"
+	"math/rand/v2"
 	"path/filepath"
 	"strings"
 	"testing"
@@ -27,6 +28,8 @@ func newStore(t *testing.T) (*Store, *clock) {
 	t.Cleanup(func() { s.Close() })
 	c := &clock{t: time.Date(2026, 10, 19, 9, 0, 0, 0, order.Jakarta)}
 	s.Now = func() time.Time { return c.t }
+	order.Pick = func(int) int { return 0 }
+	t.Cleanup(func() { order.Pick = rand.IntN })
 	return s, c
 }
 
@@ -81,7 +84,7 @@ func TestLifecycle(t *testing.T) {
 	}
 	tick(t, s)
 	p := pending(t, s)
-	if len(p) != 1 || p[0].Batch != 0 || !strings.Contains(p[0].Message, "Total: 2 porsi, 3 sate") {
+	if len(p) != 1 || p[0].Batch != 0 || p[0].Message != "Mang! Mau pesen tangkar ya 🍢🥩😋\n\nA: DAGING 2 SATE\nB: CAMPUR 1 SATE (no tauge)\n\nMakasih Mang 🙏" {
 		t.Fatalf("first send wrong: %+v", p)
 	}
 
@@ -106,16 +109,11 @@ func TestLifecycle(t *testing.T) {
 	}
 	c.t = c.t.Add(time.Minute)
 	tick(t, s)
-	if len(pending(t, s)) != 0 {
-		t.Fatal("cut before the quiet period")
-	}
-	c.t = c.t.Add(time.Minute + time.Second)
-	tick(t, s)
 	p = pending(t, s)
 	if len(p) != 1 || p[0].Batch != 1 {
-		t.Fatalf("late batch missing: %+v", p)
+		t.Fatalf("C waited since 11:30, past the 4 minute cap: %+v", p)
 	}
-	want := "*TAMBAHAN #1, Soto Tangkar*\n(di luar pesanan jam 11:30)\n\nDAGING\nCAMPUR 2 SATE\n\nTambahan: 2 porsi, 2 sate\nTotal semua: 4 porsi, 5 sate"
+	want := "Mang, ada tambahan lagi nih 🙏🍢 (TAMBAHAN #1)\n\nC: DAGING\nD: CAMPUR 2 SATE\n\nMakasih Mang 🙏"
 	if p[0].Message != want {
 		t.Fatalf("got:\n%s\nwant:\n%s", p[0].Message, want)
 	}
@@ -141,7 +139,7 @@ func TestLifecycle(t *testing.T) {
 	}
 	tick(t, s)
 	p = pending(t, s)
-	if len(p) != 1 || !strings.HasPrefix(p[0].Message, "*TAMBAHAN #2") {
+	if len(p) != 1 || !strings.Contains(p[0].Message, "(TAMBAHAN #2)") {
 		t.Fatalf("closing did not flush the waiting late line: %+v", p)
 	}
 	got, _ := s.Order(ctx, o.ID)
@@ -165,7 +163,7 @@ func TestNobodyOnTimeThenLate(t *testing.T) {
 	c.at("11:43")
 	tick(t, s)
 	p := pending(t, s)
-	if len(p) != 1 || !strings.HasPrefix(p[0].Message, "*Soto Tangkar*") {
+	if len(p) != 1 || !strings.HasPrefix(p[0].Message, "Mang! Mau pesen") {
 		t.Fatalf("first real message should be the full order: %+v", p)
 	}
 }
@@ -246,5 +244,133 @@ func TestSendRetry(t *testing.T) {
 	}
 	if len(pending(t, s)) != 1 {
 		t.Fatal("admin retry not offered")
+	}
+}
+
+// lockedAndSent leaves an order in late join with its first message delivered.
+func lockedAndSent(t *testing.T, s *Store, c *clock) Order {
+	t.Helper()
+	ctx := context.Background()
+	o := mustOrder(t, s, c)
+	s.AddLine(ctx, o.ID, "a@bfi.co.id", order.Line{Menu: order.Daging})
+	c.at("11:30")
+	tick(t, s)
+	if err := s.MarkSend(ctx, o.ID, 0, nil); err != nil {
+		t.Fatal(err)
+	}
+	return o
+}
+
+func TestLateDebounce(t *testing.T) {
+	ctx := context.Background()
+	s, c := newStore(t)
+	o := lockedAndSent(t, s, c)
+	c.at("11:40")
+	start := c.t
+	for _, d := range []time.Duration{0, 90 * time.Second, 3 * time.Minute} {
+		c.t = start.Add(d)
+		s.AddLine(ctx, o.ID, "b@bfi.co.id", order.Line{Menu: order.Campur})
+		tick(t, s)
+		if len(pending(t, s)) != 0 {
+			t.Fatalf("cut at +%s while people were still joining", d)
+		}
+	}
+	c.t = start.Add(4*time.Minute - time.Second)
+	tick(t, s)
+	if len(pending(t, s)) != 0 {
+		t.Fatal("cut before the cap")
+	}
+	c.t = start.Add(4 * time.Minute)
+	tick(t, s)
+	if p := pending(t, s); len(p) != 1 || strings.Count(p[0].Message, "B: CAMPUR") != 3 {
+		t.Fatalf("cap did not send all three: %+v", p)
+	}
+}
+
+// TestCutRace orders in the same second as the cut: the bowl must land in
+// exactly one batch, and the one already cut can no longer be taken back.
+func TestCutRace(t *testing.T) {
+	ctx := context.Background()
+	s, c := newStore(t)
+	o := lockedAndSent(t, s, c)
+	c.at("11:40")
+	s.AddLine(ctx, o.ID, "b@bfi.co.id", order.Line{Menu: order.Campur})
+	c.t = c.t.Add(order.LateQuiet)
+	tick(t, s)
+	if err := s.AddLine(ctx, o.ID, "c@bfi.co.id", order.Line{Menu: order.Daging, Sate: 1}); err != nil {
+		t.Fatal(err)
+	}
+	tick(t, s)
+	lines, _ := s.Lines(ctx, o.ID)
+	b, cl := lines[1], lines[2]
+	if b.Batch == nil || *b.Batch != 1 || cl.Batch != nil {
+		t.Fatalf("batches wrong: b=%v c=%v", b.Batch, cl.Batch)
+	}
+	if err := s.DeleteLine(ctx, o.ID, b.ID, b.Email); !errors.Is(err, ErrSent) {
+		t.Fatalf("deleted a bowl already cut for the seller: %v", err)
+	}
+	if p := pending(t, s); len(p) != 1 || strings.Contains(p[0].Message, "C: DAGING") {
+		t.Fatalf("late bowl leaked into the cut batch: %+v", p)
+	}
+}
+
+func TestNotices(t *testing.T) {
+	ctx := context.Background()
+	s, c := newStore(t)
+	s.UpsertUser(ctx, "denis.saputra@bfi.co.id", "Denis")
+	n, bad, err := s.ImportPhones(ctx, "denis.saputra@bfi.co.id, 0812-3456-789\n# comment\nbroken line\nx@bfi.co.id 021")
+	if err != nil || n != 1 || len(bad) != 2 {
+		t.Fatalf("import: %d %v %v", n, bad, err)
+	}
+	o := mustOrder(t, s, c)
+	s.AddLine(ctx, o.ID, "denis.saputra@bfi.co.id", order.Line{Menu: order.Daging, Sate: 1, Note: "no tauge"})
+	s.AddLine(ctx, o.ID, "denis.saputra@bfi.co.id", order.Line{Menu: order.Campur})
+	s.AddLine(ctx, o.ID, "nophone@bfi.co.id", order.Line{Menu: order.Campur})
+	c.at("11:30")
+	tick(t, s)
+	if p := pending(t, s); len(p) != 1 || !strings.Contains(p[0].Message, "DENIS: DAGING 1 SATE (no tauge)") || !strings.Contains(p[0].Message, "NOPHONE: CAMPUR") {
+		t.Fatalf("names in message: %+v", p)
+	}
+	if ns, _ := s.PendingNotices(ctx); len(ns) != 0 {
+		t.Fatal("notice before the seller got the order")
+	}
+	s.MarkSend(ctx, o.ID, 0, nil)
+	s.MarkSend(ctx, o.ID, 0, nil)
+	ns, _ := s.PendingNotices(ctx)
+	if len(ns) != 1 || ns[0].To != "628123456789" || ns[0].Message != order.Notice("Denis", []order.Line{{Menu: order.Daging, Sate: 1, Note: "no tauge"}, {Menu: order.Campur}}) {
+		t.Fatalf("notices: %+v", ns)
+	}
+}
+
+func TestPhoneCode(t *testing.T) {
+	ctx := context.Background()
+	s, c := newStore(t)
+	code, err := s.StartPhoneCode(ctx, "a@bfi.co.id", "628123456789")
+	if err != nil {
+		t.Fatal(err)
+	}
+	if _, err := s.StartPhoneCode(ctx, "a@bfi.co.id", "628123456789"); !errors.Is(err, ErrWait) {
+		t.Fatal("code resent without waiting")
+	}
+	if _, err := s.VerifyPhoneCode(ctx, "b@bfi.co.id", code); err == nil {
+		t.Fatal("someone else's code accepted")
+	}
+	wrong := "0000"
+	if code == wrong {
+		wrong = "1111"
+	}
+	for i := 0; i < 5; i++ {
+		s.VerifyPhoneCode(ctx, "a@bfi.co.id", wrong)
+	}
+	if _, err := s.VerifyPhoneCode(ctx, "a@bfi.co.id", code); !errors.Is(err, ErrTries) {
+		t.Fatalf("right code accepted after 5 wrong tries: %v", err)
+	}
+	c.t = c.t.Add(time.Minute)
+	code, _ = s.StartPhoneCode(ctx, "a@bfi.co.id", "628123456789")
+	if got, err := s.VerifyPhoneCode(ctx, "a@bfi.co.id", code); err != nil || got != "628123456789" {
+		t.Fatalf("verify: %q %v", got, err)
+	}
+	if p, ok := s.Phone(ctx, "a@bfi.co.id"); !ok || p != "628123456789" {
+		t.Fatal("phone not saved")
 	}
 }

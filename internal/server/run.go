@@ -47,14 +47,7 @@ func (s *Server) deliver(ctx context.Context) {
 			s.log.Error("pending sends", "err", err)
 		}
 		for _, x := range out {
-			var sendErr error
-			if s.cfg.WADryRun || !s.wa.Enabled() || s.cfg.WATo == "" {
-				s.log.Info("wa dry run", "order", x.OrderID, "batch", x.Batch, "message", x.Message)
-			} else {
-				sctx, cancel := context.WithTimeout(ctx, 20*time.Second)
-				sendErr = s.wa.Send(sctx, s.cfg.WATo, x.Message)
-				cancel()
-			}
+			sendErr := s.sendWA(ctx, s.cfg.WATo, x.Message)
 			if sendErr != nil {
 				s.log.Warn("wa send failed", "order", x.OrderID, "batch", x.Batch, "err", sendErr)
 			} else {
@@ -65,11 +58,41 @@ func (s *Server) deliver(ctx context.Context) {
 			}
 			s.changed(x.OrderID)
 		}
+		s.deliverNotices(ctx)
 		select {
 		case <-ctx.Done():
 			return
 		case <-s.wake:
 		case <-t.C:
+		}
+	}
+}
+
+func (s *Server) sendWA(ctx context.Context, to, message string) error {
+	if s.cfg.WADryRun || !s.wa.Enabled() || to == "" {
+		s.log.Info("wa dry run", "to", to, "message", message)
+		return nil
+	}
+	sctx, cancel := context.WithTimeout(ctx, 20*time.Second)
+	defer cancel()
+	return s.wa.Send(sctx, to, message)
+}
+
+// deliverNotices sends the personal "sudah diproses" messages. They run after
+// the seller's messages so a slow personal send never delays an order.
+func (s *Server) deliverNotices(ctx context.Context) {
+	ns, err := s.store.PendingNotices(ctx)
+	if err != nil {
+		s.log.Error("pending notices", "err", err)
+		return
+	}
+	for _, n := range ns {
+		err := s.sendWA(ctx, n.To, n.Message)
+		if err != nil {
+			s.log.Warn("notice failed", "order", n.OrderID, "id", n.ID, "err", err)
+		}
+		if err := s.store.MarkNotice(ctx, n.ID, err); err != nil {
+			s.log.Error("mark notice", "err", err)
 		}
 	}
 }

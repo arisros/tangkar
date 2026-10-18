@@ -1,6 +1,8 @@
 package order
 
 import (
+	"math/rand/v2"
+	"strings"
 	"testing"
 	"time"
 )
@@ -58,40 +60,69 @@ func TestClockOn(t *testing.T) {
 	}
 }
 
-var lock = time.Date(2026, 10, 19, 11, 30, 0, 0, Jakarta)
+func TestMessage(t *testing.T) {
+	Pick = func(int) int { return 0 }
+	t.Cleanup(func() { Pick = rand.IntN })
+	got := Message([]Line{
+		{"DENIS", Daging, 2, ""}, {"DENIS", Daging, 2, "no tauge"}, {"SARI", Campur, 1, ""}, {"ARIS", Campur, 0, "pedes"},
+	}, 0)
+	want := "Mang! Mau pesen tangkar ya 🍢🥩😋\n\nDENIS: DAGING 2 SATE\nDENIS: DAGING 2 SATE (no tauge)\nSARI: CAMPUR 1 SATE\nARIS: CAMPUR (pedes)\n\nMakasih Mang 🙏"
+	if got != want {
+		t.Fatalf("got:\n%s\nwant:\n%s", got, want)
+	}
+	got = Message([]Line{{"BUDI", Campur, 2, ""}}, 1)
+	want = "Mang, ada tambahan lagi nih 🙏🍢 (TAMBAHAN #1)\n\nBUDI: CAMPUR 2 SATE\n\nMakasih Mang 🙏"
+	if got != want {
+		t.Fatalf("got:\n%s\nwant:\n%s", got, want)
+	}
+	if strings.Contains(Message([]Line{{"A", Daging, 1, ""}}, 0), "Total") {
+		t.Fatal("summary line came back")
+	}
+}
 
-func TestMessageFirst(t *testing.T) {
-	got := Message("Soto Tangkar", lock, []Line{
-		{Daging, 2, ""}, {Daging, 2, "no tauge"}, {Campur, 1, ""}, {Daging, 3, ""}, {Campur, 0, ""},
-	}, nil, 0)
-	want := `*Soto Tangkar*
-Senin, 19 Oktober 2026
-
-DAGING 2 SATE
-DAGING 2 SATE (no tauge)
-CAMPUR 1 SATE
-DAGING 3 SATE
-CAMPUR
-
-Total: 5 porsi, 8 sate
-(DAGING 3, CAMPUR 2)`
+func TestNotice(t *testing.T) {
+	got := Notice("Denis", []Line{{"", Daging, 1, "no tauge"}, {"", Campur, 0, ""}})
+	want := "Halo Kak Denis 👋 orderan Kakak ke Mamang Tangkar sudah diproses ya:\n\n🍲 DAGING 1 SATE (no tauge)\n🍲 CAMPUR\n\nSelamat makan nanti 😋🍢"
 	if got != want {
 		t.Fatalf("got:\n%s\nwant:\n%s", got, want)
 	}
 }
 
-func TestMessageLate(t *testing.T) {
-	before := []Line{{Daging, 2, ""}, {Daging, 2, ""}, {Campur, 1, ""}, {Daging, 3, ""}, {Campur, 0, ""}}
-	got := Message("Soto Tangkar", lock, []Line{{Campur, 2, ""}, {Daging, 0, ""}}, before, 1)
-	want := `*TAMBAHAN #1, Soto Tangkar*
-(di luar pesanan jam 11:30)
+func TestShortNames(t *testing.T) {
+	got := ShortNames([]Person{
+		{"denis.saputra@bfi.co.id", "Denis"},
+		{"denis.wijaya@bfi.co.id", "Denis Wijaya"},
+		{"sari@bfi.co.id", ""},
+		{"m.rizki@bfi.co.id", "Muhammad Rizki"},
+		{"budi1@bfi.co.id", "Budi"},
+		{"budi2@bfi.co.id", "Budi"},
+		{"x@bfi.co.id", "<b>"},
+	})
+	want := map[string]string{
+		"denis.saputra@bfi.co.id": "DENIS S",
+		"denis.wijaya@bfi.co.id":  "DENIS W",
+		"sari@bfi.co.id":          "SARI",
+		"m.rizki@bfi.co.id":       "MUHAMMAD",
+		"budi1@bfi.co.id":         "BUDI1",
+		"budi2@bfi.co.id":         "BUDI2",
+		"x@bfi.co.id":             "B",
+	}
+	for k, v := range want {
+		if got[k] != v {
+			t.Errorf("%s: got %q want %q", k, got[k], v)
+		}
+	}
+}
 
-CAMPUR 2 SATE
-DAGING
-
-Tambahan: 2 porsi, 2 sate
-Total semua: 7 porsi, 10 sate`
-	if got != want {
-		t.Fatalf("got:\n%s\nwant:\n%s", got, want)
+func TestPhone(t *testing.T) {
+	for in, want := range map[string]string{"0812-3456-789": "628123456789", "+62 812 3456 789": "628123456789", "8123456789": "628123456789"} {
+		if got, err := Phone(in); err != nil || got != want {
+			t.Errorf("Phone(%q)=%q %v", in, got, err)
+		}
+	}
+	for _, bad := range []string{"021555", "12345", "", "6221123456"} {
+		if _, err := Phone(bad); err == nil {
+			t.Errorf("Phone(%q) accepted", bad)
+		}
 	}
 }

@@ -95,11 +95,15 @@ func (s *Server) Handler() http.Handler {
 	m.HandleFunc("POST /api/orders/{id}/late", s.admin(s.handleLate))
 	m.HandleFunc("POST /api/orders/{id}/cancel", s.admin(s.handleCancel))
 	m.HandleFunc("POST /api/orders/{id}/sends/{batch}/retry", s.admin(s.handleRetry))
+	m.HandleFunc("POST /api/phone/code", s.api(s.handlePhoneCode))
+	m.HandleFunc("POST /api/phone/verify", s.api(s.handlePhoneVerify))
+	m.HandleFunc("DELETE /api/phone", s.api(s.handlePhoneDelete))
+	m.HandleFunc("POST /api/phones", s.admin(s.handlePhoneImport))
 	return s.secure(m)
 }
 
 const csp = "default-src 'none'; script-src 'self'; style-src 'self'; img-src 'self'; connect-src 'self'; " +
-	"manifest-src 'self'; base-uri 'none'; form-action 'self'; frame-ancestors 'none'"
+	"font-src 'self'; manifest-src 'self'; base-uri 'none'; form-action 'self'; frame-ancestors 'none'"
 
 func (s *Server) secure(next http.Handler) http.Handler {
 	return http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
@@ -116,7 +120,11 @@ func (s *Server) secure(next http.Handler) http.Handler {
 func (s *Server) staticFiles() http.Handler {
 	fsrv := http.FileServerFS(s.static)
 	return http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
-		w.Header().Set("Cache-Control", "no-cache")
+		if strings.HasPrefix(r.URL.Path, "fonts/") {
+			w.Header().Set("Cache-Control", "public, max-age=31536000, immutable")
+		} else {
+			w.Header().Set("Cache-Control", "no-cache")
+		}
 		fsrv.ServeHTTP(w, r)
 	})
 }
@@ -207,7 +215,15 @@ func (s *Server) handleHealth(w http.ResponseWriter, r *http.Request) {
 }
 
 func (s *Server) handleMe(w http.ResponseWriter, r *http.Request, u User) {
-	writeJSON(w, http.StatusOK, map[string]any{"email": u.Email, "name": u.Name, "admin": u.Admin})
+	phone, _ := s.store.Phone(r.Context(), u.Email)
+	writeJSON(w, http.StatusOK, map[string]any{"email": u.Email, "name": u.Name, "admin": u.Admin, "phone": maskPhone(phone)})
+}
+
+func maskPhone(p string) string {
+	if len(p) < 8 {
+		return p
+	}
+	return "0" + p[2:5] + strings.Repeat("•", len(p)-8) + p[len(p)-3:]
 }
 
 type snapshot struct {
@@ -235,13 +251,16 @@ func (s *Server) snapshot(ctx context.Context, id string) (snapshot, error) {
 		return snapshot{}, err
 	}
 	var all, late []order.Line
-	var lastWaiting int64
+	var firstWaiting, lastWaiting int64
 	for _, l := range lines {
 		all = append(all, l.Order())
 		if l.Late {
 			late = append(late, l.Order())
-			if l.Batch == nil && l.At > lastWaiting {
-				lastWaiting = l.At
+			if l.Batch == nil {
+				if firstWaiting == 0 || l.At < firstWaiting {
+					firstWaiting = l.At
+				}
+				lastWaiting = max(lastWaiting, l.At)
 			}
 		}
 	}
@@ -250,11 +269,7 @@ func (s *Server) snapshot(ctx context.Context, id string) (snapshot, error) {
 		Totals: order.Sum(all), Late: order.Sum(late), Viewers: s.hub.viewers("order:" + id),
 	}
 	if lastWaiting > 0 {
-		cut := time.Unix(lastWaiting, 0).Add(order.LateQuiet)
-		if cut.After(o.LateUntil) {
-			cut = o.LateUntil
-		}
-		snap.CutAt = cut.UnixMilli()
+		snap.CutAt = store.CutAt(time.Unix(firstWaiting, 0), time.Unix(lastWaiting, 0), o.LateUntil).UnixMilli()
 	}
 	return snap, nil
 }
@@ -615,4 +630,80 @@ func (s *Server) handleTokenLogout(w http.ResponseWriter, r *http.Request, u Use
 		_ = s.store.RevokeToken(r.Context(), tok)
 	}
 	writeJSON(w, http.StatusOK, map[string]bool{"ok": true})
+}
+
+func (s *Server) handlePhoneCode(w http.ResponseWriter, r *http.Request, u User) {
+	var in struct {
+		Phone string `json:"phone"`
+	}
+	if !readJSON(w, r, &in) {
+		return
+	}
+	msisdn, err := order.Phone(in.Phone)
+	if err != nil {
+		writeErr(w, http.StatusBadRequest, err.Error())
+		return
+	}
+	code, err := s.store.StartPhoneCode(r.Context(), u.Email, msisdn)
+	if errors.Is(err, store.ErrWait) {
+		writeErr(w, http.StatusTooManyRequests, err.Error())
+		return
+	}
+	if err != nil {
+		s.fail(w, err)
+		return
+	}
+	msg := "Kode tangkar Kakak: " + code + " (berlaku 10 menit) 🍢\nAbaikan kalau bukan Kakak yang minta ya 🙏"
+	if err := s.sendWA(r.Context(), msisdn, msg); err != nil {
+		s.log.Warn("phone code send failed", "email", u.Email, "err", err)
+		writeErr(w, http.StatusBadGateway, "gagal kirim kode ke WhatsApp, coba lagi nanti")
+		return
+	}
+	writeJSON(w, http.StatusOK, map[string]bool{"ok": true})
+}
+
+func (s *Server) handlePhoneVerify(w http.ResponseWriter, r *http.Request, u User) {
+	var in struct {
+		Code string `json:"code"`
+	}
+	if !readJSON(w, r, &in) {
+		return
+	}
+	msisdn, err := s.store.VerifyPhoneCode(r.Context(), u.Email, in.Code)
+	if errors.Is(err, store.ErrCode) || errors.Is(err, store.ErrTries) {
+		writeErr(w, http.StatusBadRequest, err.Error())
+		return
+	}
+	if err != nil {
+		s.fail(w, err)
+		return
+	}
+	s.log.Info("phone verified", "email", u.Email)
+	writeJSON(w, http.StatusOK, map[string]string{"phone": maskPhone(msisdn)})
+}
+
+func (s *Server) handlePhoneDelete(w http.ResponseWriter, r *http.Request, u User) {
+	if err := s.store.DeletePhone(r.Context(), u.Email); err != nil {
+		s.fail(w, err)
+		return
+	}
+	writeJSON(w, http.StatusOK, map[string]bool{"ok": true})
+}
+
+func (s *Server) handlePhoneImport(w http.ResponseWriter, r *http.Request, u User) {
+	var in struct {
+		Text string `json:"text"`
+	}
+	dec := json.NewDecoder(http.MaxBytesReader(w, r.Body, 256<<10))
+	if !strings.HasPrefix(r.Header.Get("Content-Type"), "application/json") || dec.Decode(&in) != nil {
+		writeErr(w, http.StatusBadRequest, "input tidak valid")
+		return
+	}
+	n, bad, err := s.store.ImportPhones(r.Context(), in.Text)
+	if err != nil {
+		s.fail(w, err)
+		return
+	}
+	s.log.Info("phones imported", "by", u.Email, "saved", n, "rejected", len(bad))
+	writeJSON(w, http.StatusOK, map[string]any{"saved": n, "rejected": bad})
 }

@@ -9,7 +9,7 @@ function render() {
   const t = Date.now() + offset;
   const list = $("list");
   if (!data.orders.length) {
-    list.replaceChildren(el("p", { class: "lede" }, me.admin ? "Belum ada pesanan hari ini. Buka satu di atas." : "Belum ada pesanan hari ini. Tunggu link dari admin."));
+    list.replaceChildren(el("p", { class: "lede" }, me.admin ? "Belum ada pesanan hari ini, Kakak. Buka satu di atas." : "Belum ada pesanan hari ini, Kakak. Tunggu link dari admin ya."));
     return;
   }
   list.replaceChildren(...data.orders.map(s => {
@@ -45,7 +45,17 @@ async function create() {
 
 document.addEventListener("DOMContentLoaded", async () => {
   try { me = await whoami(); } catch (_) { return; }
-  if (me.admin) { $("create").hidden = false; $("c-go").addEventListener("click", create); }
+  if (me.admin) {
+    $("create").hidden = false; $("c-go").addEventListener("click", create);
+    $("phones").hidden = false;
+    $("phones-go").addEventListener("click", async () => {
+      try {
+        const r = await api("POST", "/api/phones", { text: $("phones-in").value });
+        $("phones-out").textContent = r.saved + " nomor tersimpan" + (r.rejected.length ? ". Ditolak: " + r.rejected.join(" | ") : ".");
+        if (!r.rejected.length) $("phones-in").value = "";
+      } catch (e) { $("phones-out").textContent = e.message; }
+    });
+  }
   const es = new EventSource("/api/events");
   es.addEventListener("list", ev => { data = JSON.parse(ev.data); offset = data.now - Date.now(); render(); });
   es.onopen = () => { $("live-dot").className = "dot on"; $("live").textContent = "live"; };

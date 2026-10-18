@@ -25,6 +25,7 @@
     <span class="state" id="b-at"></span>
   </section>
   <p class="note-bar" id="late-bar" hidden></p>
+  <p class="send-bar" id="send-bar" role="status" hidden></p>
 
   <section class="machine" id="machine" hidden>
     <div class="menu" role="group" aria-label="Menu">
@@ -52,7 +53,7 @@
   </section>
 
   <section class="mine" id="mine" hidden>
-    <h2>Pesanan kamu</h2>
+    <h2>Pesanan Kakak</h2>
     <ul id="mine-list"></ul>
   </section>
 
@@ -61,8 +62,22 @@
     <div id="nota-body"><p class="empty">memuat…</p></div>
   </section>
 
+  <section class="phone" id="phone" hidden>
+    <p id="phone-msg">📱 Nomor WhatsApp Kakak belum ada nih. Isi kalau mau dapat notif pas pesanan sudah sampai ke Mamang (boleh dilewati).</p>
+    <div class="inline" id="phone-step1">
+      <input id="phone-in" type="tel" inputmode="tel" maxlength="20" placeholder="0812xxxxxxx" aria-label="nomor WhatsApp">
+      <button class="tool" type="button" id="phone-send">Kirim kode</button>
+    </div>
+    <div class="inline" id="phone-step2" hidden>
+      <input id="code-in" inputmode="numeric" maxlength="4" placeholder="kode 4 angka" aria-label="kode dari WhatsApp">
+      <button class="tool" type="button" id="code-send">Simpan</button>
+    </div>
+    <p class="err" id="phone-err" role="alert"></p>
+    <button class="link" type="button" id="phone-skip">nanti saja</button>
+  </section>
+
   <div class="foot">
-    <span id="viewers"></span>
+    <span><span id="viewers"></span><span id="phone-on"></span></span>
     <span><span class="dot" id="live-dot"></span><span id="live">menyambung</span></span>
   </div>
 

@@ -117,6 +117,7 @@ type model struct {
 	status string
 	bad    bool
 	width  int
+	height int
 }
 
 func newModel(c *client, who me) *model {
@@ -126,7 +127,7 @@ func newModel(c *client, who me) *model {
 	note.Prompt = ""
 	in := textinput.New()
 	in.Prompt = "> "
-	return &model{c: c, me: who, menu: order.Daging, note: note, input: in, width: 80}
+	return &model{c: c, me: who, menu: order.Daging, note: note, input: in, width: 80, height: 40}
 }
 
 func (m *model) Init() tea.Cmd { return tick() }
@@ -201,7 +202,7 @@ func copyCmd(text string) tea.Cmd {
 func (m *model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 	switch msg := msg.(type) {
 	case tea.WindowSizeMsg:
-		m.width = msg.Width
+		m.width, m.height = msg.Width, msg.Height
 	case tickMsg:
 		return m, tick()
 	case listMsg:
@@ -525,17 +526,26 @@ func (m *model) promptKey(k tea.KeyMsg) (tea.Model, tea.Cmd) {
 }
 
 var (
-	sInk    = lipgloss.NewStyle().Bold(true)
-	sMuted  = lipgloss.NewStyle().Foreground(lipgloss.Color("244"))
-	sRed    = lipgloss.NewStyle().Foreground(lipgloss.Color("160")).Bold(true)
-	sGreen  = lipgloss.NewStyle().Foreground(lipgloss.Color("34"))
-	sAmber  = lipgloss.NewStyle().Foreground(lipgloss.Color("172"))
-	sKey    = lipgloss.NewStyle().Foreground(lipgloss.Color("230")).Background(lipgloss.Color("236")).Padding(0, 1)
-	sOn     = lipgloss.NewStyle().Foreground(lipgloss.Color("230")).Background(lipgloss.Color("160")).Bold(true)
-	sOff    = lipgloss.NewStyle().Foreground(lipgloss.Color("244"))
-	sBoard  = lipgloss.NewStyle().Foreground(lipgloss.Color("229")).Background(lipgloss.Color("235")).Bold(true).Padding(0, 2)
-	sSelect = lipgloss.NewStyle().Reverse(true)
+	cInk   = lipgloss.Color("230")
+	cMuted = lipgloss.Color("244")
+	cRed   = lipgloss.Color("160")
+	cGreen = lipgloss.Color("71")
+	cAmber = lipgloss.Color("214")
+	cBoard = lipgloss.Color("235")
+
+	sInk   = lipgloss.NewStyle().Bold(true)
+	sMuted = lipgloss.NewStyle().Foreground(cMuted)
+	sRed   = lipgloss.NewStyle().Foreground(cRed).Bold(true)
+	sGreen = lipgloss.NewStyle().Foreground(cGreen)
+	sAmber = lipgloss.NewStyle().Foreground(cAmber)
+	sKey   = lipgloss.NewStyle().Foreground(cInk).Background(lipgloss.Color("238")).Padding(0, 1)
+	sSel   = lipgloss.NewStyle().Reverse(true)
+	sFrame = lipgloss.NewStyle().Border(lipgloss.RoundedBorder()).BorderForeground(lipgloss.Color("180")).Padding(0, 2)
+	sBoard = lipgloss.NewStyle().Background(cBoard).Foreground(lipgloss.Color("229")).Padding(0, 1)
 )
+
+// inner is the content width of the centered box.
+func (m *model) inner() int { return max(40, min(66, m.width-6)) }
 
 func dot(ok bool) string {
 	if ok {
@@ -554,180 +564,271 @@ func left(d time.Duration) string {
 
 func clock(t time.Time) string { return t.In(order.Jakarta).Format("15:04") }
 
-func keys(pairs ...string) string {
-	var b strings.Builder
-	for i := 0; i+1 < len(pairs); i += 2 {
-		b.WriteString(sKey.Render(pairs[i]) + " " + sMuted.Render(pairs[i+1]) + "  ")
+// row puts l on the left and r on the right of a w-wide line.
+func row(l, r string, w int) string {
+	gap := w - lipgloss.Width(l) - lipgloss.Width(r)
+	if gap < 1 {
+		gap = 1
 	}
-	return b.String()
+	return l + strings.Repeat(" ", gap) + r
+}
+
+// keys lays out key hints, wrapping them to the box.
+func keys(w int, pairs ...string) string {
+	var lines []string
+	cur := ""
+	for i := 0; i+1 < len(pairs); i += 2 {
+		item := sKey.Render(pairs[i]) + " " + sMuted.Render(pairs[i+1])
+		if cur != "" && lipgloss.Width(cur)+2+lipgloss.Width(item) > w {
+			lines = append(lines, cur)
+			cur = ""
+		}
+		if cur != "" {
+			cur += "  "
+		}
+		cur += item
+	}
+	if cur != "" {
+		lines = append(lines, cur)
+	}
+	return strings.Join(lines, "\n")
 }
 
 func (m *model) View() string {
+	w := m.inner()
 	var b strings.Builder
-	role := ""
+	who := m.me.Name
 	if m.me.Admin {
-		role = sAmber.Render(" admin")
+		who += sAmber.Render(" admin")
 	}
-	host := strings.TrimPrefix(strings.TrimPrefix(m.c.base, "https://"), "http://")
-	fmt.Fprintf(&b, "%s  %s  %s%s\n\n", sInk.Render("TANGKAR"), sMuted.Render(host+" · "+m.me.Name), dot(m.liveL), role)
+	live := m.liveL
+	if m.view == viewOrder {
+		live = m.liveO
+	}
+	b.WriteString(row(sInk.Render("🍲 TANGKAR"), dot(live)+"  "+sMuted.Render(who), w) + "\n")
+	b.WriteString(sMuted.Render(strings.Repeat("═", w)) + "\n\n")
 	switch m.view {
 	case viewCreate:
-		m.viewCreate(&b)
+		m.viewCreate(&b, w)
 	case viewOrder:
-		m.viewOrder(&b)
+		m.viewOrder(&b, w)
 	default:
-		m.viewList(&b)
+		m.viewList(&b, w)
 	}
 	if m.status != "" {
 		st := sGreen
 		if m.bad {
 			st = sRed
 		}
-		b.WriteString("\n" + st.Render(m.status) + "\n")
+		b.WriteString("\n" + lipgloss.NewStyle().Width(w).Inherit(st).Render(m.status))
 	}
-	return b.String()
+	box := sFrame.Width(w + 4).Render(strings.TrimRight(b.String(), "\n"))
+	return lipgloss.Place(m.width, m.height, lipgloss.Center, lipgloss.Center, box)
 }
 
-func (m *model) viewList(b *strings.Builder) {
+var phaseLabel = map[string]string{"open": "BUKA", "late": "LATE JOIN", "closed": "TUTUP", "cancelled": "BATAL"}
+
+func (m *model) viewList(b *strings.Builder, w int) {
 	now := m.now()
-	b.WriteString(sMuted.Render("PESANAN HARI INI") + "\n\n")
+	b.WriteString(sMuted.Render("PESANAN HARI INI") + "\n")
 	if len(m.list.Orders) == 0 {
-		b.WriteString("  belum ada pesanan\n")
+		msg := "Belum ada pesanan hari ini, Kakak."
+		if !m.me.Admin {
+			msg += " Tunggu link dari admin ya."
+		}
+		b.WriteString("\n" + sMuted.Render(msg) + "\n")
 	}
-	fmt.Fprintf(b, "  %-8s %-18s %-6s %-10s %-10s %6s %6s %5s %5s\n", "ID", "JUDUL", "TUTUP", "SISA", "STATUS", "DAGING", "CAMPUR", "SATE", "BUKA")
 	for i, s := range m.list.Orders {
 		o := s.Order
 		p := phaseOf(o, now)
-		rem := ""
+		when := o.DayLabel
 		switch p {
 		case "open":
-			rem = left(o.LockAt.Sub(now))
+			when = "tutup " + clock(o.LockAt) + " · sisa " + left(o.LockAt.Sub(now))
 		case "late":
-			rem = left(o.LateUntil.Sub(now))
+			when = "late join s.d. " + clock(o.LateUntil) + " · sisa " + left(o.LateUntil.Sub(now))
 		}
-		wa := ""
+		st := sMuted
+		switch p {
+		case "open":
+			st = sGreen
+		case "late":
+			st = sAmber
+		}
+		totals := fmt.Sprintf("DAGING %d · CAMPUR %d · SATE %d", s.Totals.Daging, s.Totals.Campur, s.Totals.Sate)
+		if s.Viewers > 0 {
+			totals += fmt.Sprintf(" · %d buka", s.Viewers)
+		}
 		for _, x := range s.Sends {
 			if x.Status == order.SendFailed {
-				wa = sRed.Render(" WA gagal")
+				totals += sRed.Render(" · WA gagal")
 			}
 		}
-		title := []rune(o.Title)
-		if len(title) > 18 {
-			title = title[:18]
-		}
-		row := fmt.Sprintf("  %-8s %-18s %-6s %-10s %-10s %6d %6d %5d %5d", o.ID, string(title), clock(o.LockAt), rem, p, s.Totals.Daging, s.Totals.Campur, s.Totals.Sate, s.Viewers)
+		tw := w - 4
+		body := row(sInk.Render(strings.ToUpper(o.Title)), st.Bold(true).Render(phaseLabel[p]), tw) + "\n" +
+			sMuted.Render(when) + "\n" + totals
+		card := lipgloss.NewStyle().Border(lipgloss.RoundedBorder()).BorderForeground(lipgloss.Color("240")).Padding(0, 1).Width(w - 2)
 		if i == m.cursor {
-			row = sSelect.Render(row)
+			card = card.Border(lipgloss.ThickBorder()).BorderForeground(cRed)
 		}
-		b.WriteString(row + wa + "\n")
+		b.WriteString(card.Render(body) + "\n")
 	}
 	b.WriteString("\n")
+	pairs := []string{"↑↓", "pilih", "enter", "buka", "c", "salin link"}
 	if m.me.Admin {
-		b.WriteString(keys("n", "baru"))
+		pairs = append(pairs, "n", "baru")
 	}
-	b.WriteString(keys("↑↓", "pilih", "enter", "buka", "c", "salin link", "q", "keluar") + "\n")
+	b.WriteString(keys(w, append(pairs, "q", "keluar")...) + "\n")
 }
 
-func (m *model) viewCreate(b *strings.Builder) {
+func (m *model) viewCreate(b *strings.Builder, w int) {
 	b.WriteString(sInk.Render("BUKA PESANAN BARU") + "\n\n")
 	for _, f := range m.form {
-		b.WriteString("  " + f.View() + "\n")
+		b.WriteString(f.View() + "\n")
 	}
-	b.WriteString("\n" + keys("tab", "pindah", "enter", "buka pesanan", "esc", "batal") + "\n")
+	b.WriteString("\n" + keys(w, "tab", "pindah", "enter", "buka pesanan", "esc", "batal") + "\n")
 }
 
-func (m *model) viewOrder(b *strings.Builder) {
+func (m *model) board(w int, o store.Order, p string, now time.Time) string {
+	var label, state, big, at string
+	st := sBoard
+	switch p {
+	case "open":
+		label, state, big, at = "TUTUP DALAM", "BUKA", left(o.LockAt.Sub(now)), "tutup "+clock(o.LockAt)
+		if o.LockAt.Sub(now) < 5*time.Minute {
+			st = st.Foreground(lipgloss.Color("210"))
+		}
+	case "late":
+		label, state, big, at = "LATE JOIN SISA", "LATE JOIN", left(o.LateUntil.Sub(now)), "s.d. "+clock(o.LateUntil)
+		st = st.Background(lipgloss.Color("94"))
+	case "cancelled":
+		label, state, big = "DIBATALKAN", "BATAL", clock(o.LockAt)
+	default:
+		label, state, big = "SUDAH TUTUP", "TUTUP", clock(o.LockAt)
+	}
+	iw := w - 2
+	return st.Width(w).Render(row(label, state, iw) + "\n" + row(lipgloss.NewStyle().Bold(true).Render(big), at, iw))
+}
+
+func (m *model) sendBar(w int) string {
+	var last *store.Send
+	for i := range m.snap.Sends {
+		if m.snap.Sends[i].Status != order.SendSkipped {
+			last = &m.snap.Sends[i]
+		}
+	}
+	if last == nil {
+		return ""
+	}
+	bar := lipgloss.NewStyle().Width(w).Padding(0, 1).Bold(true)
+	switch {
+	case last.Status == order.SendPending:
+		return bar.Background(lipgloss.Color("236")).Foreground(lipgloss.Color("229")).Render("🛵 LAGI DIKIRIM KE MAMANG! SEBENTAR YA KAKAK 🙏") + "\n"
+	case last.Status == order.SendFailed:
+		return bar.Foreground(cRed).Render("Mamang belum nerima, lagi dicoba lagi ya Kakak 🙏") + "\n"
+	case m.now().Sub(time.Unix(last.SentAt, 0)) < 15*time.Minute:
+		return bar.Foreground(cGreen).Render("✓ Sudah sampai ke Mamang, Kakak-kakak 😋 ("+clock(time.Unix(last.SentAt, 0))+")") + "\n"
+	}
+	return ""
+}
+
+func (m *model) menuKeys(w int) string {
+	bw := (w - 2) / 2
+	key := func(name, sub string, on bool) string {
+		st := lipgloss.NewStyle().Border(lipgloss.RoundedBorder()).BorderForeground(lipgloss.Color("240")).Width(bw - 2).Align(lipgloss.Center)
+		if on {
+			st = st.Border(lipgloss.ThickBorder()).BorderForeground(cRed).Background(cRed).Foreground(cInk)
+		}
+		return st.Render(lipgloss.NewStyle().Bold(true).Render(name) + "\n" + sub)
+	}
+	return lipgloss.JoinHorizontal(lipgloss.Top,
+		key("DAGING", "soto daging", m.menu == order.Daging), "  ",
+		key("CAMPUR", "daging + jeroan", m.menu == order.Campur))
+}
+
+func (m *model) viewOrder(b *strings.Builder, w int) {
 	if m.snap == nil {
-		b.WriteString("  memuat…\n\n" + keys("esc", "kembali") + "\n")
+		b.WriteString(sMuted.Render("memuat…") + "\n\n" + keys(w, "esc", "kembali") + "\n")
 		return
 	}
 	s, o, now := m.snap, m.snap.Order, m.now()
 	p := phaseOf(o, now)
-	fmt.Fprintf(b, "%s  %s  %s\n", sInk.Render(strings.ToUpper(o.Title)), sMuted.Render(o.DayLabel), dot(m.liveO))
-	switch p {
-	case "open":
-		st := sBoard
-		if o.LockAt.Sub(now) < 5*time.Minute {
-			st = st.Foreground(lipgloss.Color("203"))
-		}
-		b.WriteString(st.Render(fmt.Sprintf("BUKA · tutup %s · sisa %s", clock(o.LockAt), left(o.LockAt.Sub(now)))) + "\n")
-	case "late":
-		b.WriteString(sBoard.Foreground(lipgloss.Color("214")).Render(fmt.Sprintf("LATE JOIN · s.d. %s · sisa %s", clock(o.LateUntil), left(o.LateUntil.Sub(now)))) + "\n")
-		b.WriteString(sAmber.Render("pesanan masuk TAMBAHAN, dikirim otomatis 2 menit setelah susulan terakhir") + "\n")
-	case "cancelled":
-		b.WriteString(sRed.Render("DIBATALKAN") + "\n")
-	default:
-		b.WriteString(sRed.Render("TUTUP") + "\n")
+	b.WriteString(sInk.Render(strings.ToUpper(o.Title)) + "\n")
+	b.WriteString(sMuted.Render(o.DayLabel) + "\n\n")
+	b.WriteString(m.board(w, o, p, now) + "\n")
+	if p == "late" {
+		b.WriteString(lipgloss.NewStyle().Width(w).Foreground(cAmber).Render("Pesanan Kakak masuk TAMBAHAN, dikirim otomatis 2 menit setelah susulan terakhir (paling lama 4 menit).") + "\n")
 	}
-	if len(s.Viewers) > 0 {
-		b.WriteString(sMuted.Render("lagi buka: "+strings.Join(s.Viewers, ", ")) + "\n")
-	}
+	b.WriteString(m.sendBar(w))
 	b.WriteString("\n")
 
 	if p == "open" || p == "late" {
-		d, c := sOff.Render("  DAGING  "), sOff.Render("  CAMPUR  ")
-		if m.menu == order.Daging {
-			d = sOn.Render("[ DAGING ]")
-		} else {
-			c = sOn.Render("[ CAMPUR ]")
-		}
+		b.WriteString(m.menuKeys(w) + "\n")
 		note := m.note.View()
 		if !m.noting && m.note.Value() == "" {
-			note = sMuted.Render("(n untuk isi)")
+			note = sMuted.Render("n untuk isi")
 		}
-		fmt.Fprintf(b, "  %s %s   SATE [-] %2d [+]   CATATAN %s\n\n", d, c, m.sate, note)
+		b.WriteString(fmt.Sprintf("SATE  [-] %s [+]     CATATAN  %s", sInk.Render(fmt.Sprintf("%2d", m.sate)), note) + "\n\n")
 	}
 
-	mine := m.mine()
-	if len(mine) > 0 {
-		b.WriteString(sMuted.Render("PESANAN KAMU") + "\n")
+	if mine := m.mine(); len(mine) > 0 {
+		b.WriteString(sMuted.Render("PESANAN KAKAK") + "\n")
 		for i, l := range mine {
 			tag := ""
 			if l.Late {
 				tag = sAmber.Render(" susulan")
 			}
-			row := "  " + l.Order().String()
+			item := "  " + l.Order().String() + "  "
 			if i == m.pick {
-				row = sSelect.Render(row)
+				item = sSel.Render(item)
 			}
-			b.WriteString(row + tag + "\n")
+			b.WriteString(item + tag + "\n")
 		}
 		b.WriteString("\n")
 	}
 
-	b.WriteString(sMuted.Render("NOTA") + "\n")
-	m.viewNota(b)
+	nota := lipgloss.NewStyle().Border(lipgloss.NormalBorder()).BorderForeground(lipgloss.Color("240")).Padding(0, 1).Width(w - 2)
+	b.WriteString(nota.Render(m.nota(w-4)) + "\n")
+	if len(s.Viewers) > 0 {
+		b.WriteString(sMuted.Render("lagi buka: "+strings.Join(s.Viewers, ", ")) + "\n")
+	}
 	b.WriteString("\n")
 
-	if m.prompt != promptNone {
-		switch m.prompt {
-		case confirmLock:
-			b.WriteString(sRed.Render("Kunci sekarang dan kirim ke grup? (y/n)") + "\n")
-		case confirmCancel:
-			b.WriteString(sRed.Render("Batalkan pesanan ini? (y/n)") + "\n")
-		case confirmLateOff:
-			b.WriteString(sRed.Render("Tutup late join sekarang? (y/n)") + "\n")
-		case promptLockAt:
-			b.WriteString("Jam tutup baru (HH:MM)\n" + m.input.View() + "\n")
-		case promptLate:
-			b.WriteString("Late join, menit setelah tutup (0 = tutup)\n" + m.input.View() + "\n")
-		}
+	switch m.prompt {
+	case confirmLock:
+		b.WriteString(sRed.Render("Kunci sekarang dan kirim ke Mamang? (y/n)") + "\n")
+		return
+	case confirmCancel:
+		b.WriteString(sRed.Render("Batalkan pesanan ini? (y/n)") + "\n")
+		return
+	case confirmLateOff:
+		b.WriteString(sRed.Render("Tutup late join sekarang? (y/n)") + "\n")
+		return
+	case promptLockAt:
+		b.WriteString("Jam tutup baru (HH:MM)\n" + m.input.View() + "\n")
+		return
+	case promptLate:
+		b.WriteString("Late join, menit setelah tutup (0 = tutup)\n" + m.input.View() + "\n")
 		return
 	}
+	var pairs []string
 	if p == "open" || p == "late" {
-		b.WriteString(keys("d/a", "daging/campur", "+/-", "sate", "n", "catatan", "enter", "pesan") + "\n")
+		pairs = append(pairs, "d/a", "daging/campur", "+/-", "sate", "n", "catatan", "enter", "pesan")
 	}
-	b.WriteString(keys("↑↓", "pilih", "x", "hapus", "c", "salin link", "esc", "kembali") + "\n")
+	pairs = append(pairs, "↑↓", "pilih", "x", "hapus", "c", "salin link", "esc", "kembali")
+	b.WriteString(keys(w, pairs...) + "\n")
 	if m.me.Admin {
-		b.WriteString(keys("L", "kunci", "T", "jam tutup", "J", "late join", "X", "tutup late", "C", "batal", "R", "kirim ulang") + "\n")
+		b.WriteString(keys(w, "L", "kunci", "T", "jam tutup", "J", "late join", "X", "tutup late", "C", "batal", "R", "kirim ulang") + "\n")
 	}
 }
 
-func (m *model) viewNota(b *strings.Builder) {
+func (m *model) nota(w int) string {
+	var b strings.Builder
 	s := m.snap
+	b.WriteString(lipgloss.NewStyle().Width(w).Align(lipgloss.Center).Bold(true).Render("N O T A") + "\n")
 	if len(s.Lines) == 0 {
-		b.WriteString(sMuted.Render("  belum ada pesanan") + "\n")
-		return
+		b.WriteString(sMuted.Render("belum ada pesanan"))
+		return b.String()
 	}
 	sends := map[int]store.Send{}
 	for _, x := range s.Sends {
@@ -746,8 +847,9 @@ func (m *model) viewNota(b *strings.Builder) {
 		}
 		groups[*l.Batch] = append(groups[*l.Batch], l)
 	}
+	rule := sMuted.Render(strings.Repeat("-", w))
 	line := func(l store.Line) {
-		fmt.Fprintf(b, "  %-28s %s\n", l.Order().String(), sMuted.Render(l.Name))
+		b.WriteString(row(l.Order().String(), sMuted.Render(l.Name), w) + "\n")
 	}
 	for i, k := range batches {
 		title := "PESANAN " + clock(s.Order.LockAt)
@@ -761,9 +863,12 @@ func (m *model) viewNota(b *strings.Builder) {
 		case order.SendPending:
 			st = sAmber.Render("mengirim…")
 		case order.SendFailed:
-			st = sRed.Render("gagal: " + x.Error)
+			st = sRed.Render("gagal, dicoba lagi")
 		}
-		fmt.Fprintf(b, "  %s  %s\n", sInk.Render(title), st)
+		if k == 0 && phaseOf(s.Order, m.now()) == "open" {
+			st = sMuted.Render("dikirim " + clock(s.Order.LockAt))
+		}
+		b.WriteString(rule + "\n" + row(sInk.Render(title), st, w) + "\n")
 		for _, l := range groups[k] {
 			line(l)
 		}
@@ -771,13 +876,16 @@ func (m *model) viewNota(b *strings.Builder) {
 	if len(waiting) > 0 {
 		at := ""
 		if s.CutAt > 0 {
-			at = "kirim ±" + clock(time.UnixMilli(s.CutAt))
+			at = sAmber.Render("ke Mamang ±" + clock(time.UnixMilli(s.CutAt)))
 		}
-		fmt.Fprintf(b, "  %s  %s\n", sInk.Render("SUSULAN, MENUNGGU"), sAmber.Render(at))
+		b.WriteString(rule + "\n" + row(sInk.Render("SUSULAN, MENUNGGU"), at, w) + "\n")
 		for _, l := range waiting {
 			line(l)
 		}
 	}
 	t := s.Totals
-	fmt.Fprintf(b, "  %s\n  DAGING %d · CAMPUR %d · SATE %d · %s\n", strings.Repeat("-", 40), t.Daging, t.Campur, t.Sate, sInk.Render(fmt.Sprintf("TOTAL %d PORSI", t.Bowls)))
+	b.WriteString(rule + "\n")
+	b.WriteString(row(fmt.Sprintf("DAGING %d  CAMPUR %d", t.Daging, t.Campur), fmt.Sprintf("SATE %d", t.Sate), w) + "\n")
+	b.WriteString(row(sInk.Render("TOTAL"), sInk.Render(fmt.Sprintf("%d porsi", t.Bowls)), w))
+	return b.String()
 }

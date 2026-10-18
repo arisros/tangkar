@@ -75,6 +75,33 @@ CREATE TABLE IF NOT EXISTS sends (
 	next_try   INTEGER NOT NULL DEFAULT 0,
 	PRIMARY KEY (order_id, batch)
 );
+CREATE TABLE IF NOT EXISTS phones (
+	email      TEXT PRIMARY KEY,
+	msisdn     TEXT NOT NULL,
+	source     TEXT NOT NULL,
+	updated_at INTEGER NOT NULL
+);
+CREATE TABLE IF NOT EXISTS phone_codes (
+	email      TEXT PRIMARY KEY,
+	msisdn     TEXT NOT NULL,
+	code_hash  TEXT NOT NULL,
+	expires_at INTEGER NOT NULL,
+	tries      INTEGER NOT NULL DEFAULT 0,
+	sent_at    INTEGER NOT NULL
+);
+CREATE TABLE IF NOT EXISTS notices (
+	id         INTEGER PRIMARY KEY AUTOINCREMENT,
+	order_id   TEXT NOT NULL,
+	batch      INTEGER NOT NULL,
+	email      TEXT NOT NULL,
+	msisdn     TEXT NOT NULL,
+	message    TEXT NOT NULL,
+	status     TEXT NOT NULL,
+	error      TEXT NOT NULL DEFAULT '',
+	attempts   INTEGER NOT NULL DEFAULT 0,
+	next_try   INTEGER NOT NULL DEFAULT 0,
+	UNIQUE (order_id, batch, email)
+);
 `
 
 type Store struct {
@@ -464,7 +491,7 @@ func (s *Store) tickOrder(ctx context.Context, id string, now time.Time) (bool, 
 		if err != nil {
 			return false, err
 		}
-		status, msg := order.SendPending, order.Message(o.Title, o.LockAt, lines, nil, 0)
+		status, msg := order.SendPending, order.Message(lines, 0)
 		if len(lines) == 0 {
 			status, msg = order.SendSkipped, ""
 		}
@@ -504,18 +531,20 @@ func (s *Store) tickOrder(ctx context.Context, id string, now time.Time) (bool, 
 }
 
 // cutLate turns waiting late lines into the next batch once nobody has added
-// one for LateQuiet, or late join has ended. It waits while the first message
-// has not gone out, so a TAMBAHAN never reaches the seller before the order.
+// one for LateQuiet, the oldest has waited LateMaxWait, or late join has ended.
+// The cut and the batch number are one transaction on the only connection, so
+// a line inserted a moment later simply waits for the next batch. It holds back
+// while an earlier message is unsent, so a TAMBAHAN never overtakes the order.
 func (s *Store) cutLate(ctx context.Context, tx *sql.Tx, o Order, now time.Time) (bool, error) {
 	var waiting int
-	var last sql.NullInt64
-	if err := tx.QueryRowContext(ctx, `SELECT count(*),MAX(created_at) FROM lines WHERE order_id=? AND batch IS NULL`, o.ID).Scan(&waiting, &last); err != nil {
+	var first, last sql.NullInt64
+	if err := tx.QueryRowContext(ctx, `SELECT count(*),MIN(created_at),MAX(created_at) FROM lines WHERE order_id=? AND batch IS NULL`, o.ID).Scan(&waiting, &first, &last); err != nil {
 		return false, err
 	}
 	if waiting == 0 {
 		return false, nil
 	}
-	if now.Before(o.LateUntil) && now.Sub(time.Unix(last.Int64, 0)) < order.LateQuiet {
+	if now.Before(CutAt(time.Unix(first.Int64, 0), time.Unix(last.Int64, 0), o.LateUntil)) {
 		return false, nil
 	}
 	var unsent int
@@ -532,36 +561,69 @@ func (s *Store) cutLate(ctx context.Context, tx *sql.Tx, o Order, now time.Time)
 	if _, err := tx.ExecContext(ctx, `UPDATE lines SET batch=? WHERE order_id=? AND batch IS NULL`, next, o.ID); err != nil {
 		return false, err
 	}
-	before, err := batchLines(ctx, tx, o.ID, "batch IN (SELECT batch FROM sends WHERE order_id=lines.order_id AND status='"+order.SendSent+"')")
-	if err != nil {
-		return false, err
-	}
 	lines, err := batchLines(ctx, tx, o.ID, fmt.Sprintf("batch=%d", next))
 	if err != nil {
 		return false, err
 	}
 	// The first delivered message was the full order, so the delivered count is
-	// also this TAMBAHAN's number.
-	msg := order.Message(o.Title, o.LockAt, lines, before, delivered)
+	// also this TAMBAHAN's number, and 0 means this one is the full order.
+	msg := order.Message(lines, delivered)
 	_, err = tx.ExecContext(ctx, `INSERT INTO sends(order_id,batch,status,message) VALUES(?,?,?,?)`, o.ID, next, order.SendPending, msg)
 	return err == nil, err
 }
 
-func batchLines(ctx context.Context, tx *sql.Tx, orderID, where string) ([]order.Line, error) {
-	rows, err := tx.QueryContext(ctx, `SELECT menu,sate,note FROM lines WHERE order_id=? AND `+where+` ORDER BY id`, orderID)
+// CutAt is when waiting late lines go to the seller.
+func CutAt(first, last, lateUntil time.Time) time.Time {
+	at := last.Add(order.LateQuiet)
+	if cap := first.Add(order.LateMaxWait); cap.Before(at) {
+		at = cap
+	}
+	if lateUntil.Before(at) {
+		at = lateUntil
+	}
+	return at
+}
+
+type person struct {
+	order.Line
+	email, name string
+}
+
+func batchPeople(ctx context.Context, tx *sql.Tx, orderID, where string) ([]person, error) {
+	rows, err := tx.QueryContext(ctx, `SELECT l.email,COALESCE(u.name,''),l.menu,l.sate,l.note FROM lines l
+		LEFT JOIN users u ON u.email=l.email WHERE l.order_id=? AND `+where+` ORDER BY l.id`, orderID)
 	if err != nil {
 		return nil, err
 	}
 	defer rows.Close()
-	var out []order.Line
+	var out []person
 	for rows.Next() {
-		var l order.Line
-		if err := rows.Scan(&l.Menu, &l.Sate, &l.Note); err != nil {
+		var p person
+		if err := rows.Scan(&p.email, &p.name, &p.Menu, &p.Sate, &p.Note); err != nil {
 			return nil, err
 		}
-		out = append(out, l)
+		out = append(out, p)
 	}
 	return out, rows.Err()
+}
+
+// batchLines loads a batch with each bowl labelled by its owner's short name.
+func batchLines(ctx context.Context, tx *sql.Tx, orderID, where string) ([]order.Line, error) {
+	ps, err := batchPeople(ctx, tx, orderID, where)
+	if err != nil {
+		return nil, err
+	}
+	people := make([]order.Person, len(ps))
+	for i, p := range ps {
+		people[i] = order.Person{Email: p.email, Name: p.name}
+	}
+	short := order.ShortNames(people)
+	out := make([]order.Line, len(ps))
+	for i, p := range ps {
+		out[i] = p.Line
+		out[i].Who = short[p.email]
+	}
+	return out, nil
 }
 
 type Outbox struct {
@@ -592,14 +654,52 @@ func (s *Store) PendingSends(ctx context.Context) ([]Outbox, error) {
 	return out, rows.Err()
 }
 
+// MarkSend records a delivery attempt. A delivered message also queues the
+// personal notice for everyone in it who has a WhatsApp number.
 func (s *Store) MarkSend(ctx context.Context, orderID string, batch int, sendErr error) error {
 	if sendErr != nil {
 		_, err := s.db.ExecContext(ctx, `UPDATE sends SET status=?, error=?, attempts=attempts+1, next_try=?+30*(attempts+1) WHERE order_id=? AND batch=?`,
 			order.SendFailed, clip(sendErr.Error(), 300), s.Now().Unix(), orderID, batch)
 		return err
 	}
-	_, err := s.db.ExecContext(ctx, `UPDATE sends SET status=?, error='', sent_at=? WHERE order_id=? AND batch=?`, order.SendSent, s.Now().Unix(), orderID, batch)
-	return err
+	tx, err := s.db.BeginTx(ctx, nil)
+	if err != nil {
+		return err
+	}
+	defer tx.Rollback()
+	if _, err := tx.ExecContext(ctx, `UPDATE sends SET status=?, error='', sent_at=? WHERE order_id=? AND batch=?`, order.SendSent, s.Now().Unix(), orderID, batch); err != nil {
+		return err
+	}
+	ps, err := batchPeople(ctx, tx, orderID, fmt.Sprintf("l.batch=%d", batch))
+	if err != nil {
+		return err
+	}
+	byEmail := map[string][]order.Line{}
+	names := map[string]string{}
+	var emails []string
+	for _, p := range ps {
+		if _, ok := byEmail[p.email]; !ok {
+			emails = append(emails, p.email)
+		}
+		byEmail[p.email] = append(byEmail[p.email], p.Line)
+		names[p.email] = p.name
+	}
+	for _, email := range emails {
+		var msisdn string
+		err := tx.QueryRowContext(ctx, `SELECT msisdn FROM phones WHERE email=?`, email).Scan(&msisdn)
+		if errors.Is(err, sql.ErrNoRows) {
+			continue
+		}
+		if err != nil {
+			return err
+		}
+		name := strings.Fields(names[email] + " " + strings.SplitN(email, "@", 2)[0])[0]
+		if _, err := tx.ExecContext(ctx, `INSERT OR IGNORE INTO notices(order_id,batch,email,msisdn,message,status) VALUES(?,?,?,?,?,?)`,
+			orderID, batch, email, msisdn, order.Notice(name, byEmail[email]), order.SendPending); err != nil {
+			return err
+		}
+	}
+	return tx.Commit()
 }
 
 func clip(s string, n int) string {

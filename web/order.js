@@ -45,7 +45,7 @@ function sendState(s) {
   if (!s) return null;
   if (s.status === "sent") return el("span", { class: "ok" }, "✓ terkirim " + hhmm(s.sent_at * 1000));
   if (s.status === "pending") return el("span", { class: "warn" }, "mengirim…");
-  if (s.status === "failed") return el("span", { class: "bad" }, "gagal kirim, dicoba lagi");
+  if (s.status === "failed") return el("span", { class: "bad" }, "gagal, dicoba lagi");
   return null;
 }
 
@@ -68,7 +68,7 @@ function renderNota() {
     if (k === "wait") title = "Susulan, menunggu";
     else title = n++ === 0 ? "Pesanan " + hhmm(snap.order.lock_at) : "Tambahan #" + (n - 1);
     let status = k === "wait"
-      ? el("span", { class: "warn" }, snap.cut_at ? "kirim ±" + hhmm(snap.cut_at) : "")
+      ? el("span", { class: "warn" }, snap.cut_at ? "ke Mamang ±" + hhmm(snap.cut_at) : "")
       : sendState(sends.get(k));
     if (k === 0 && phase(snap.order, now()) === "open") status = el("span", {}, "dikirim " + hhmm(snap.order.lock_at));
     return el("div", { class: "sec" },
@@ -122,7 +122,7 @@ function renderBoard() {
   }
   const bar = $("late-bar");
   bar.hidden = p !== "late";
-  if (p === "late") bar.textContent = "Pesanan utama sudah dikirim ke penjual. Pesananmu masuk TAMBAHAN dan dikirim otomatis 2 menit setelah susulan terakhir.";
+  if (p === "late") bar.textContent = "Kakak-kakak, pesanan utama sudah jalan ke Mamang. Pesanan Kakak sekarang masuk TAMBAHAN, dikirim otomatis 2 menit setelah susulan terakhir (paling lama 4 menit).";
   $("machine").hidden = false;
   $("stamp").hidden = p === "open" || p === "late";
   for (const x of $("machine").querySelectorAll("button, input")) x.disabled = !(p === "open" || p === "late") || (x.id === "go" && busy);
@@ -146,6 +146,27 @@ function renderAdmin(p) {
   $("a-late").value = Math.round((Date.parse(snap.order.late_until) - Date.parse(snap.order.lock_at)) / 60000);
 }
 
+// renderSendBar tells everyone what Mamang has: on its way, arrived, or not yet.
+function renderSendBar() {
+  const bar = $("send-bar");
+  const sends = snap.sends.filter(s => s.status !== "skipped");
+  const last = sends[sends.length - 1];
+  bar.hidden = !last;
+  if (!last) return;
+  if (last.status === "pending") {
+    bar.className = "send-bar sending";
+    bar.replaceChildren(el("span", {}, "🛵"), " Lagi dikirim ke Mamang! Sebentar ya Kakak 🙏");
+  } else if (last.status === "failed") {
+    bar.className = "send-bar fail";
+    bar.textContent = "Mamang belum nerima, lagi dicoba lagi ya Kakak 🙏";
+  } else if (now() - last.sent_at * 1000 < 15 * 60 * 1000) {
+    bar.className = "send-bar done";
+    bar.textContent = "✓ Sudah sampai ke Mamang, Kakak-kakak 😋 (" + hhmm(last.sent_at * 1000) + ")";
+  } else {
+    bar.hidden = true;
+  }
+}
+
 function render() {
   const o = snap.order;
   document.title = o.title + " · Tangkar";
@@ -155,7 +176,32 @@ function render() {
   $("viewers").textContent = v.length ? "Lagi buka: " + v.slice(0, 4).join(", ") + (v.length > 4 ? " +" + (v.length - 4) : "") : "";
   const p = phase(o, now());
   $("board").dataset.phase = p;
-  renderBoard(); renderMine(p); renderNota(); renderAdmin(p);
+  renderBoard(); renderMine(p); renderNota(); renderAdmin(p); renderSendBar();
+}
+
+function renderPhone() {
+  let skipped = false;
+  try { skipped = localStorage.getItem("tangkar.phone.skip") === "1"; } catch (_) {}
+  $("phone").hidden = !!me.phone || skipped;
+  $("phone-on").textContent = me.phone ? " · notif WA ke " + me.phone : "";
+}
+
+async function phoneCode() {
+  $("phone-err").textContent = "";
+  try {
+    await api("POST", "/api/phone/code", { phone: $("phone-in").value });
+    $("phone-step1").hidden = true; $("phone-step2").hidden = false;
+    $("phone-msg").textContent = "Kode sudah dikirim ke WhatsApp Kakak, masukkan di sini ya.";
+    $("code-in").focus();
+  } catch (e) { $("phone-err").textContent = e.message; }
+}
+
+async function phoneVerify() {
+  $("phone-err").textContent = "";
+  try {
+    const r = await api("POST", "/api/phone/verify", { code: $("code-in").value });
+    me.phone = r.phone; renderPhone();
+  } catch (e) { $("phone-err").textContent = e.message; }
 }
 
 async function adminDo(path, body, ask) {
@@ -189,8 +235,12 @@ document.addEventListener("DOMContentLoaded", async () => {
   $("a-late-off").addEventListener("click", () => adminDo("/late", { minutes: 0 }, "Tutup late join sekarang?"));
   $("a-time-go").addEventListener("click", () => adminDo("/lock", { at: $("a-time").value }));
   $("a-late-go").addEventListener("click", () => adminDo("/late", { minutes: parseInt($("a-late").value, 10) || 0 }));
+  $("phone-send").addEventListener("click", phoneCode);
+  $("code-send").addEventListener("click", phoneVerify);
+  $("phone-skip").addEventListener("click", () => { try { localStorage.setItem("tangkar.phone.skip", "1"); } catch (_) {} renderPhone(); });
   setSate(0);
   try { me = await whoami(); } catch (_) { return; }
+  renderPhone();
   connect();
   setInterval(renderBoard, 250);
 });
