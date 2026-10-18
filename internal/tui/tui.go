@@ -1004,7 +1004,7 @@ func (m *model) viewOrder(b *strings.Builder, w int) {
 			}
 			b.WriteString(row(sInk.Render(title), sMuted.Render("esc batal"), w) + "\n")
 		case "friend":
-			b.WriteString(row(sInk.Render("👥 UNTUK: "+strings.ToUpper(m.forName)), sMuted.Render("esc batal"), w) + "\n")
+			b.WriteString(row(sInk.Render("UNTUK: "+strings.ToUpper(m.forName)), sMuted.Render("esc batal"), w) + "\n")
 		case "edit":
 			for _, l := range m.mine() {
 				if l.ID == m.editID {
@@ -1049,7 +1049,7 @@ func (m *model) viewOrder(b *strings.Builder, w int) {
 		b.WriteString("Late join, menit setelah tutup (0 = tutup)\n" + m.input.View() + "\n")
 		return
 	case promptFriend:
-		b.WriteString("👥 Orderkan teman: nama temannya (maks 20 huruf)\n" + m.input.View() + "\n" + sMuted.Render("enter lanjut · esc batal") + "\n")
+		b.WriteString("Orderkan teman: nama temannya (maks 20 huruf)\n" + m.input.View() + "\n" + sMuted.Render("enter lanjut · esc batal") + "\n")
 		return
 	}
 	var pairs []string

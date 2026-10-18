@@ -143,7 +143,7 @@ function renderMine(p) {
   const editing = mine.find(l => l.id === editID);
   $("form-h").hidden = !(mode === "add" || mode === "edit" || mode === "friend");
   if (mode === "add") $("form-title").textContent = p === "late" ? "Order susulan" : "Tambah mangkok lagi";
-  if (mode === "friend") $("form-title").textContent = "👥 Orderkan teman";
+  if (mode === "friend") $("form-title").textContent = "Orderkan teman";
   if (mode === "edit") $("form-title").textContent = "Ganti: " + (editing.for_name ? editing.for_name.toUpperCase() + ": " : "") + lineText(editing);
   $("for-row").hidden = !(mode === "friend" || (mode === "edit" && editing && editing.for_name));
   $("friend-form").hidden = mode === "edit" || mode === "friend";
