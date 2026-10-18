@@ -1,0 +1,25 @@
+<!doctype html>
+<html lang="id">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>Tangkar TUI</title>
+<link rel="icon" href="/static/favicon.svg" type="image/svg+xml">
+<link rel="stylesheet" href="/static/style.css">
+<script src="/static/common.js" defer></script>
+<script src="/static/link.js" defer></script>
+</head>
+<body>
+<main>
+  <header class="top">
+    <h1 class="brand"><a href="/">Tangkar</a></h1>
+    <span class="who" id="who"></span>
+  </header>
+  <p class="lede">Terminal minta masuk sebagai kamu. Pastikan kode ini sama dengan yang tampil di terminal.</p>
+  <div class="code" id="code">----</div>
+  <button class="go" type="button" id="go">Izinkan terminal</button>
+  <p class="err" id="err" role="alert"></p>
+  <p class="lede" id="done" hidden>Selesai. Kembali ke terminal.</p>
+</main>
+</body>
+</html>

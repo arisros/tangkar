@@ -1,0 +1,89 @@
+<!doctype html>
+<html lang="id">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1, viewport-fit=cover">
+<meta name="theme-color" content="#1d1a15">
+<title>Tangkar</title>
+<link rel="icon" href="/static/favicon.svg" type="image/svg+xml">
+<link rel="stylesheet" href="/static/style.css">
+<script src="/static/common.js" defer></script>
+<script src="/static/order.js" defer></script>
+</head>
+<body>
+<main>
+  <header class="top">
+    <h1 class="brand"><a href="/" id="title">Soto Tangkar</a></h1>
+    <span class="who" id="who"></span>
+  </header>
+  <p class="day" id="day">&nbsp;</p>
+
+  <section class="board" id="board" aria-live="polite">
+    <span class="label" id="b-label">Tutup</span>
+    <span class="state" id="b-state"></span>
+    <span class="clock" id="b-clock">--:--:--</span>
+    <span class="state" id="b-at"></span>
+  </section>
+  <p class="note-bar" id="late-bar" hidden></p>
+
+  <section class="machine" id="machine" hidden>
+    <div class="menu" role="group" aria-label="Menu">
+      <button class="key" type="button" data-menu="DAGING" aria-pressed="true">Daging<small>soto daging</small></button>
+      <button class="key" type="button" data-menu="CAMPUR" aria-pressed="false">Campur<small>daging + jeroan</small></button>
+    </div>
+    <div class="row">
+      <span class="lbl">Sate</span>
+      <div class="step">
+        <button type="button" id="sate-minus" aria-label="kurangi sate">−</button>
+        <output id="sate" aria-live="polite">0</output>
+        <button type="button" id="sate-plus" aria-label="tambah sate">+</button>
+      </div>
+    </div>
+    <div class="row">
+      <span class="lbl">Catatan</span>
+      <div class="field">
+        <input id="note" maxlength="10" autocomplete="off" autocapitalize="off" placeholder="no tauge" aria-label="catatan, maksimal 10 huruf">
+        <span class="count" id="note-count">0/10</span>
+      </div>
+    </div>
+    <button class="go" type="button" id="go">Pesan</button>
+    <p class="err" id="err" role="alert"></p>
+    <div class="stamp" id="stamp" hidden><span>TUTUP</span></div>
+  </section>
+
+  <section class="mine" id="mine" hidden>
+    <h2>Pesanan kamu</h2>
+    <ul id="mine-list"></ul>
+  </section>
+
+  <section class="nota" id="nota">
+    <h2>Nota</h2>
+    <div id="nota-body"><p class="empty">memuat…</p></div>
+  </section>
+
+  <div class="foot">
+    <span id="viewers"></span>
+    <span><span class="dot" id="live-dot"></span><span id="live">menyambung</span></span>
+  </div>
+
+  <section class="admin" id="admin" hidden>
+    <h2>Admin</h2>
+    <div class="tools">
+      <button class="tool" type="button" id="a-copy">Salin link</button>
+      <button class="tool" type="button" id="a-lock">Kunci sekarang</button>
+      <button class="tool" type="button" id="a-late-off">Tutup late join</button>
+      <button class="tool danger" type="button" id="a-cancel">Batalkan</button>
+    </div>
+    <div class="inline">
+      <input id="a-time" type="time" aria-label="jam tutup baru">
+      <button class="tool" type="button" id="a-time-go">Ubah jam tutup</button>
+    </div>
+    <div class="inline">
+      <input id="a-late" type="number" min="0" max="240" inputmode="numeric" aria-label="late join, menit setelah tutup">
+      <button class="tool" type="button" id="a-late-go">Late join (menit)</button>
+    </div>
+    <p class="err" id="a-err" role="alert"></p>
+  </section>
+</main>
+</body>
+</html>

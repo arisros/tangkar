@@ -1,0 +1,47 @@
+<!doctype html>
+<html lang="id">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1, viewport-fit=cover">
+<meta name="theme-color" content="#1d1a15">
+<title>Tangkar</title>
+<link rel="icon" href="/static/favicon.svg" type="image/svg+xml">
+<link rel="stylesheet" href="/static/style.css">
+<script src="/static/common.js" defer></script>
+<script src="/static/index.js" defer></script>
+</head>
+<body>
+<main>
+  <header class="top">
+    <h1 class="brand"><a href="/">Tangkar</a></h1>
+    <span class="who" id="who"></span>
+  </header>
+
+  <section class="admin" id="create" hidden>
+    <h2>Buka pesanan baru</h2>
+    <div class="form">
+      <label for="c-title">Judul</label>
+      <input id="c-title" maxlength="40" value="Soto Tangkar" autocomplete="off">
+      <div class="two">
+        <div><label for="c-lock">Jam tutup</label><input id="c-lock" type="time" value="11:30"></div>
+        <div><label for="c-late">Late join (menit)</label><input id="c-late" type="number" min="0" max="240" value="60" inputmode="numeric"></div>
+      </div>
+    </div>
+    <button class="go" type="button" id="c-go">Buka pesanan</button>
+    <p class="err" id="c-err" role="alert"></p>
+    <div class="made" id="made" hidden>
+      <code id="made-url"></code>
+      <div class="tools">
+        <button class="tool" type="button" id="made-copy">Salin link</button>
+        <button class="tool" type="button" id="made-share">Bagikan</button>
+        <a class="tool" id="made-open" href="#">Buka</a>
+      </div>
+    </div>
+  </section>
+
+  <h2 class="day list-h">PESANAN HARI INI</h2>
+  <div id="list"><p class="lede">memuat…</p></div>
+  <div class="foot"><span></span><span><span class="dot" id="live-dot"></span><span id="live">menyambung</span></span></div>
+</main>
+</body>
+</html>
