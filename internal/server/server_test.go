@@ -229,3 +229,33 @@ func TestFriendLine(t *testing.T) {
 		t.Fatalf("stored: %v", l)
 	}
 }
+
+func TestVersionedAssets(t *testing.T) {
+	e := newEnv(t)
+	id := e.create()
+	req, _ := http.NewRequest("GET", e.ts.URL+"/o/"+id, nil)
+	req.AddCookie(&http.Cookie{Name: sessionCookie, Value: e.srv.sess.issue("budi@bfi.co.id", time.Now().Add(time.Hour))})
+	resp, err := http.DefaultClient.Do(req)
+	if err != nil {
+		t.Fatal(err)
+	}
+	page, _ := io.ReadAll(resp.Body)
+	resp.Body.Close()
+	script := "/static/" + e.srv.asset + "/order.js"
+	if !strings.Contains(string(page), `src="`+script+`"`) || strings.Contains(string(page), `"/static/order.js"`) {
+		t.Fatalf("page does not point at versioned assets:\n%s", page)
+	}
+	if resp.Header.Get("Cache-Control") != "no-store" {
+		t.Fatalf("page cache: %s", resp.Header.Get("Cache-Control"))
+	}
+	for path, cache := range map[string]string{script: "immutable", "/static/order.js": "no-cache", "/static/v-old/order.js": "no-cache"} {
+		r, err := http.Get(e.ts.URL + path)
+		if err != nil {
+			t.Fatal(err)
+		}
+		r.Body.Close()
+		if r.StatusCode != 200 || !strings.Contains(r.Header.Get("Cache-Control"), cache) {
+			t.Errorf("%s: %d %s", path, r.StatusCode, r.Header.Get("Cache-Control"))
+		}
+	}
+}

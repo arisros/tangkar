@@ -1,7 +1,10 @@
 package server
 
 import (
+	"bytes"
 	"context"
+	"crypto/sha256"
+	"encoding/hex"
 	"encoding/json"
 	"errors"
 	"fmt"
@@ -41,6 +44,8 @@ type Server struct {
 	oauth  *oauth2.Config
 	log    *slog.Logger
 	static fs.FS
+	asset  string
+	pages  map[string][]byte
 	origin string
 	wake   chan struct{}
 }
@@ -60,7 +65,42 @@ func New(cfg Config, st *store.Store, w *wa.Client, static fs.FS, log *slog.Logg
 	if cfg.GoogleClientID != "" && cfg.GoogleClientSecret != "" {
 		s.oauth = s.oauthConfig()
 	}
+	if err := s.versionAssets(); err != nil {
+		return nil, err
+	}
 	return s, nil
+}
+
+// versionAssets names this build's scripts and styles after their content and
+// rewrites the pages to point there. Cloudflare stretches the browser cache of
+// .js and .css to hours whatever the origin says, so a fixed URL would let a
+// phone run yesterday's script against today's page.
+func (s *Server) versionAssets() error {
+	h := sha256.New()
+	s.pages = map[string][]byte{}
+	err := fs.WalkDir(s.static, ".", func(path string, d fs.DirEntry, err error) error {
+		if err != nil || d.IsDir() {
+			return err
+		}
+		b, err := fs.ReadFile(s.static, path)
+		if err != nil {
+			return err
+		}
+		if strings.HasSuffix(path, ".html") {
+			s.pages[path] = b
+		}
+		h.Write([]byte(path))
+		h.Write(b)
+		return nil
+	})
+	if err != nil {
+		return err
+	}
+	s.asset = "v-" + hex.EncodeToString(h.Sum(nil))[:10]
+	for name, b := range s.pages {
+		s.pages[name] = bytes.ReplaceAll(b, []byte(`"/static/`), []byte(`"/static/`+s.asset+`/`))
+	}
+	return nil
 }
 
 func (s *Server) Handler() http.Handler {
@@ -118,10 +158,16 @@ func (s *Server) secure(next http.Handler) http.Handler {
 	})
 }
 
+// staticFiles serves /static/<version>/file for good, and the bare path for
+// pages still open from before a deploy.
 func (s *Server) staticFiles() http.Handler {
 	fsrv := http.FileServerFS(s.static)
 	return http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
-		if strings.HasPrefix(r.URL.Path, "fonts/") {
+		first, rest, versioned := strings.Cut(r.URL.Path, "/")
+		if versioned && strings.HasPrefix(first, "v-") {
+			r.URL.Path = rest
+		}
+		if (versioned && first == s.asset) || strings.HasPrefix(r.URL.Path, "fonts/") {
 			w.Header().Set("Cache-Control", "public, max-age=31536000, immutable")
 		} else {
 			w.Header().Set("Cache-Control", "no-cache")
@@ -136,8 +182,9 @@ func (s *Server) page(name string) http.HandlerFunc {
 			http.Redirect(w, r, "/auth/login?next="+url.QueryEscape(r.URL.RequestURI()), http.StatusFound)
 			return
 		}
-		w.Header().Set("Cache-Control", "no-cache")
-		http.ServeFileFS(w, r, s.static, name)
+		w.Header().Set("Content-Type", "text/html; charset=utf-8")
+		w.Header().Set("Cache-Control", "no-store")
+		w.Write(s.pages[name])
 	}
 }
 
